@@ -3,6 +3,8 @@
 # Local agent/code-index state
 .agents/
 .codegraph/
+.superpowers/
+
 
 # Python caches and environments
 __pycache__/
