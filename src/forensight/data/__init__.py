@@ -1,5 +1,23 @@
 """Dataset utilities for ForenSight."""
 
+from forensight.data.audit import (
+    AuditReport,
+    ImageAttributes,
+    STD_LUMINANCE_QUANT_TBL,
+    audit_manifest_images,
+    audit_manifest_leakage,
+    calculate_class_balance,
+    calculate_distribution_stats,
+    calculate_format_stats,
+    calculate_jpeg_quality_buckets,
+    calculate_resolution_counts,
+    compute_dhash,
+    compute_file_sha256,
+    estimate_jpeg_quality,
+    extract_image_attributes,
+    generate_audit_markdown,
+    hamming_distance,
+)
 from forensight.data.inventory import (
     DatasetEntry,
     DatasetInventory,
@@ -10,8 +28,10 @@ from forensight.data.inventory import (
     save_inventory,
 )
 from forensight.data.split import (
+    NON_GENERATOR_LABELS,
     PROTOCOL_V1_SPLITS,
     SCALE_TIERS,
+    VALID_SPLIT_NAMES,
     Manifest,
     ManifestRecord,
     assert_generator_disjoint,
@@ -22,21 +42,40 @@ from forensight.data.split import (
 )
 
 __all__ = [
+    "AuditReport",
     "DatasetEntry",
     "DatasetInventory",
     "GeneratorSubset",
+    "ImageAttributes",
     "Manifest",
     "ManifestRecord",
+    "NON_GENERATOR_LABELS",
     "PROTOCOL_V1_SPLITS",
     "SCALE_TIERS",
+    "STD_LUMINANCE_QUANT_TBL",
+    "VALID_SPLIT_NAMES",
     "assert_generator_disjoint",
+    "audit_manifest_images",
+    "audit_manifest_leakage",
     "build_default_inventory",
+    "calculate_class_balance",
+    "calculate_distribution_stats",
+    "calculate_format_stats",
+    "calculate_jpeg_quality_buckets",
+    "calculate_resolution_counts",
+    "compute_dhash",
+    "compute_file_sha256",
     "create_scale_manifest",
+    "estimate_jpeg_quality",
+    "extract_image_attributes",
+    "generate_audit_markdown",
     "get_default_inventory",
     "get_generator_membership_summary",
+    "hamming_distance",
     "load_inventory",
     "save_inventory",
     "subsample_manifest_by_class",
     "validate_no_leakage",
 ]
+
 

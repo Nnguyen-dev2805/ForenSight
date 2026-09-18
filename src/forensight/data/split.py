@@ -29,6 +29,7 @@ VALID_SPLIT_NAMES = {
     "in_domain_test",
     "near_ood",
     "cross_generator_ood",
+    "cross_generator_test",
     "cross_dataset_test",
     "modern_external",
     "real_world_external",
@@ -140,6 +141,10 @@ class ManifestRecord:
             raise ValueError("ManifestRecord generator must be non-empty string.")
         if not self.split:
             raise ValueError("ManifestRecord split must be non-empty string.")
+        if self.split.lower().strip() not in VALID_SPLIT_NAMES:
+            raise ValueError(
+                f"ManifestRecord split must be one of {sorted(VALID_SPLIT_NAMES)}, got: '{self.split}'"
+            )
         if not isinstance(self.metadata, dict):
             raise ValueError(
                 f"ManifestRecord metadata must be a dictionary, got: {type(self.metadata)}"
@@ -357,14 +362,14 @@ def validate_no_leakage(
 
     if should_check_generators:
         train_fake_gens = {
-            r.generator
+            r.generator.lower().strip()
             for r in train_manifest
-            if r.label == 1 and r.generator.lower() not in NON_GENERATOR_LABELS
+            if r.label == 1 and r.generator.lower().strip() not in NON_GENERATOR_LABELS
         }
         test_fake_gens = {
-            r.generator
+            r.generator.lower().strip()
             for r in test_manifest
-            if r.label == 1 and r.generator.lower() not in NON_GENERATOR_LABELS
+            if r.label == 1 and r.generator.lower().strip() not in NON_GENERATOR_LABELS
         }
         gen_overlap = train_fake_gens & test_fake_gens
         if gen_overlap:
@@ -399,16 +404,16 @@ def assert_generator_disjoint(
         manifest_list = list(ood_manifests)
 
     train_gens = {
-        r.generator
+        r.generator.lower().strip()
         for r in train_manifest
-        if r.label == 1 and r.generator.lower() not in NON_GENERATOR_LABELS
+        if r.label == 1 and r.generator.lower().strip() not in NON_GENERATOR_LABELS
     }
 
     for idx, ood_m in enumerate(manifest_list):
         ood_gens = {
-            r.generator
+            r.generator.lower().strip()
             for r in ood_m
-            if r.label == 1 and r.generator.lower() not in NON_GENERATOR_LABELS
+            if r.label == 1 and r.generator.lower().strip() not in NON_GENERATOR_LABELS
         }
         overlap = train_gens & ood_gens
         if overlap:
@@ -532,3 +537,18 @@ def get_generator_membership_summary() -> dict[str, Any]:
         ],
         "scale_tiers": list(SCALE_TIERS.keys()),
     }
+
+
+__all__ = [
+    "NON_GENERATOR_LABELS",
+    "PROTOCOL_V1_SPLITS",
+    "SCALE_TIERS",
+    "VALID_SPLIT_NAMES",
+    "Manifest",
+    "ManifestRecord",
+    "assert_generator_disjoint",
+    "create_scale_manifest",
+    "get_generator_membership_summary",
+    "subsample_manifest_by_class",
+    "validate_no_leakage",
+]

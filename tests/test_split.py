@@ -88,6 +88,17 @@ class TestManifestRecord:
                 split="train",
             )
 
+    def test_invalid_split_raises(self):
+        with pytest.raises(ValueError, match="split must be one of"):
+            ManifestRecord(
+                sample_id="s1",
+                image_path="/data/img1.jpg",
+                label=0,
+                dataset="genimage",
+                generator="sd14",
+                split="unregistered_split_name",
+            )
+
     def test_record_dict_roundtrip(self):
         rec = ManifestRecord(
             sample_id="rec_100",
@@ -238,6 +249,17 @@ class TestLeakageValidation:
         errors = validate_no_leakage(train, test, check_generators=True, strict=False)
         assert any("Generator leakage" in err for err in errors)
 
+    def test_cross_generator_leakage_with_case_and_whitespace_mismatch(self):
+        train = Manifest([
+            ManifestRecord(sample_id="t1", image_path="/t1.jpg", label=1, dataset="genimage", generator="SD14 ", split="train"),
+        ])
+        test = Manifest([
+            ManifestRecord(sample_id="o1", image_path="/o1.jpg", label=1, dataset="genimage", generator=" sd14", split="cross_generator_ood"),
+        ])
+        errors = validate_no_leakage(train, test, check_generators=True, strict=False)
+        assert len(errors) == 1
+        assert "Generator leakage detected" in errors[0]
+
 
 class TestGeneratorDisjoint:
     """Unit tests for assert_generator_disjoint helper."""
@@ -261,6 +283,16 @@ class TestGeneratorDisjoint:
         ])
         ood = Manifest([
             ManifestRecord(sample_id="o1", image_path="/o1.jpg", label=1, dataset="genimage", generator="sd14", split="cross_generator_ood"),
+        ])
+        with pytest.raises(AssertionError, match="Generator leakage detected"):
+            assert_generator_disjoint(train, ood)
+
+    def test_generator_overlap_case_whitespace_raises(self):
+        train = Manifest([
+            ManifestRecord(sample_id="t1", image_path="/t1.jpg", label=1, dataset="genimage", generator=" Midjourney ", split="train"),
+        ])
+        ood = Manifest([
+            ManifestRecord(sample_id="o1", image_path="/o1.jpg", label=1, dataset="genimage", generator="midjourney", split="cross_generator_ood"),
         ])
         with pytest.raises(AssertionError, match="Generator leakage detected"):
             assert_generator_disjoint(train, ood)
@@ -399,3 +431,9 @@ class TestProtocolSummary:
         assert "cross_generator_ood" in summary
         assert set(summary["train_generators"]).isdisjoint(set(summary["cross_generator_ood"]))
         assert summary["scale_tiers"] == list(SCALE_TIERS.keys())
+
+    def test_valid_split_names_export(self):
+        from forensight.data import VALID_SPLIT_NAMES as EXPORTED_SPLITS
+        assert "train" in EXPORTED_SPLITS
+        assert "cross_generator_ood" in EXPORTED_SPLITS
+        assert "cross_generator_test" in EXPORTED_SPLITS
