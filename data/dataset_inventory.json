@@ -1,0 +1,322 @@
+{
+  "schema_version": "1.0.0",
+  "updated_at": "2026-09-18",
+  "datasets": {
+    "genimage": {
+      "name": "genimage",
+      "display_name": "GenImage",
+      "version": "1.0 (NeurIPS 2023)",
+      "source": "https://github.com/GenImage-Dataset/GenImage",
+      "evaluation_role": "Primary Stage 1 benchmark (train, in-domain val/test, near-OOD, cross-generator OOD)",
+      "real_source": "ImageNet (ILSVRC2012)",
+      "fake_generators": [
+        "Stable Diffusion v1.4",
+        "Stable Diffusion v1.5",
+        "Midjourney",
+        "ADM",
+        "GLIDE",
+        "Wukong",
+        "VQDM",
+        "BigGAN"
+      ],
+      "image_count": {
+        "train_real_sd14": 160000,
+        "train_fake_sd14": 160000,
+        "val_real_per_generator": 20000,
+        "val_fake_per_generator": 20000,
+        "total_benchmark_pairs": "~1,331,167"
+      },
+      "resolution_distribution": "Fake images have model-native resolutions: 512x512 for SD1.4, SD1.5, Wukong; 256x256 for ADM, GLIDE, VQDM, BigGAN; variable/512+ for Midjourney. Real ImageNet images have variable dimensions.",
+      "format_compression": "Real images from ImageNet JPEG; fake images generated JPEG/PNG. Confound warning: Unbiased GenImage documented significant JPEG quality factor and resolution disparity between real and fake, requiring Task 0.3 audit before interpreting detection scores.",
+      "label_mapping": {
+        "real": 0,
+        "fake": 1
+      },
+      "license": "GenImage: Apache-2.0 / Research Use; ImageNet: Non-commercial educational and research terms.",
+      "access_requirements": "Open research download via official GenImage repository (Google Drive / Baidu Netdisk / Hugging Face mirrors).",
+      "local_path": "data/raw/genimage",
+      "generator_subsets": [
+        {
+          "generator_id": "sd14",
+          "generator_name": "Stable Diffusion v1.4",
+          "role": "train_and_in_domain",
+          "resolution": "512x512 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "train_real": 160000,
+            "train_fake": 160000,
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 360000
+          },
+          "local_path": "data/raw/genimage/sdv4",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage",
+            "https://huggingface.co/datasets/GenImage/GenImage"
+          ],
+          "notes": "Primary training source and in-domain held-out validation/test split for Stage 1."
+        },
+        {
+          "generator_id": "sd15",
+          "generator_name": "Stable Diffusion v1.5",
+          "role": "near_ood",
+          "resolution": "512x512 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/sdv5",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Near-OOD evaluation: same model family and architecture with updated weights."
+        },
+        {
+          "generator_id": "midjourney",
+          "generator_name": "Midjourney",
+          "role": "cross_generator_ood",
+          "resolution": "Variable / approx 512x512 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/midjourney",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: closed-source commercial text-to-image generator."
+        },
+        {
+          "generator_id": "adm",
+          "generator_name": "ADM (Guided Diffusion)",
+          "role": "cross_generator_ood",
+          "resolution": "256x256 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/adm",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: pixel-space diffusion model with classifier guidance."
+        },
+        {
+          "generator_id": "glide",
+          "generator_name": "GLIDE",
+          "role": "cross_generator_ood",
+          "resolution": "256x256 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/glide",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: filtered pixel-space diffusion model."
+        },
+        {
+          "generator_id": "wukong",
+          "generator_name": "Wukong",
+          "role": "cross_generator_ood",
+          "resolution": "512x512 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/wukong",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: Chinese text-to-image diffusion model."
+        },
+        {
+          "generator_id": "vqdm",
+          "generator_name": "VQDM (VQ-Diffusion)",
+          "role": "cross_generator_ood",
+          "resolution": "256x256 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/vqdm",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: vector-quantized discrete diffusion model."
+        },
+        {
+          "generator_id": "biggan",
+          "generator_name": "BigGAN",
+          "role": "cross_generator_ood",
+          "resolution": "256x256 for fake; variable (ImageNet) for real",
+          "estimated_count": {
+            "val_real": 20000,
+            "val_fake": 20000,
+            "total": 40000
+          },
+          "local_path": "data/raw/genimage/biggan",
+          "download_urls": [
+            "https://github.com/GenImage-Dataset/GenImage"
+          ],
+          "notes": "Cross-generator OOD: non-diffusion GAN architecture baseline."
+        }
+      ],
+      "download_instructions": [
+        "Clone or visit official repo: https://github.com/GenImage-Dataset/GenImage",
+        "Download SD1.4 (imagenet_ai_0419_sdv4) into data/raw/genimage/sdv4",
+        "Download remaining generators into corresponding data/raw/genimage/<generator> directories as needed for cross-generator testing"
+      ],
+      "notes": "Primary benchmark for Stage 1. Training is strictly restricted to SD1.4 subset to test cross-generator generalization. SD1.4 contains official train/nature, train/ai, val/nature, val/ai splits."
+    },
+    "genimage_plus_plus": {
+      "name": "genimage_plus_plus",
+      "display_name": "GenImage++",
+      "version": "1.0 (2024)",
+      "source": "https://huggingface.co/datasets/Lunahera/genimagepp",
+      "evaluation_role": "Modern external benchmark (test-only, evaluation hierarchy level 4)",
+      "real_source": "ImageNet-1k, COCO, and high-quality web photographs",
+      "fake_generators": [
+        "FLUX.1 (FLUX.1-schnell, FLUX.1-dev)",
+        "Stable Diffusion 3 (SD3-Medium)",
+        "PixArt-alpha / PixArt-sigma",
+        "Kolors",
+        "HunyuanDiT",
+        "AuraFlow"
+      ],
+      "image_count": {
+        "real": 50000,
+        "fake": 50000,
+        "total": 100000
+      },
+      "resolution_distribution": "Predominantly 1024x1024 for modern generative models; some 512x512 subsets.",
+      "format_compression": "JPEG and PNG; modern generation pipelines with varying post-processing quality.",
+      "label_mapping": {
+        "real": 0,
+        "fake": 1
+      },
+      "license": "Research and educational use per Hugging Face repository terms (CC-BY / OpenRAIL derivatives).",
+      "access_requirements": "Open Hugging Face dataset download via huggingface-cli or datasets library.",
+      "local_path": "data/raw/genimagepp",
+      "generator_subsets": [
+        {
+          "generator_id": "flux_sd3_modern",
+          "generator_name": "Modern Generative Models (FLUX.1, SD3, PixArt, Kolors)",
+          "role": "modern_external",
+          "resolution": "1024x1024 / 512x512",
+          "estimated_count": {
+            "total": 100000
+          },
+          "local_path": "data/raw/genimagepp",
+          "download_urls": [
+            "https://huggingface.co/datasets/Lunahera/genimagepp"
+          ],
+          "notes": "Modern rectified-flow and advanced diffusion models with reduced high-frequency spectral artifacts."
+        }
+      ],
+      "download_instructions": [
+        "Install huggingface_hub: pip install huggingface_hub",
+        "Download dataset: huggingface-cli download Lunahera/genimagepp --local-dir data/raw/genimagepp --repo-type dataset"
+      ],
+      "notes": "Evaluation-only. Used to test generalization to latest generative architectures (FLUX, SD3) without tuning hyperparameters."
+    },
+    "wildrf": {
+      "name": "wildrf",
+      "display_name": "WildRF",
+      "version": "1.0 (2024)",
+      "source": "https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld",
+      "evaluation_role": "Real-world external benchmark (test-only, evaluation hierarchy level 5)",
+      "real_source": "Social media and open web platforms (Reddit, Twitter/X, Instagram, news media)",
+      "fake_generators": [
+        "In-the-wild AI generators (Midjourney v5/v6, DALL-E 2/3, Stable Diffusion XL, Firefly, online tools)"
+      ],
+      "image_count": {
+        "real": 6000,
+        "fake": 6000,
+        "total": 12000
+      },
+      "resolution_distribution": "Highly variable resolutions and aspect ratios matching organic user uploads.",
+      "format_compression": "JPEG, WebP, PNG; multiple generations of platform lossy compression and metadata stripping.",
+      "label_mapping": {
+        "real": 0,
+        "fake": 1
+      },
+      "license": "Academic research use only.",
+      "access_requirements": "Publicly accessible via repository download links.",
+      "local_path": "data/raw/wildrf",
+      "generator_subsets": [
+        {
+          "generator_id": "social_wild",
+          "generator_name": "Social Media In-The-Wild AI-Generated Images",
+          "role": "real_world_external",
+          "resolution": "Variable web resolutions (400x400 to 2048x2048+)",
+          "estimated_count": {
+            "total": 12000
+          },
+          "local_path": "data/raw/wildrf",
+          "download_urls": [
+            "https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld"
+          ],
+          "notes": "Real-world distribution subjected to social platform recompression, resizing, and screenshotting."
+        }
+      ],
+      "download_instructions": [
+        "Refer to https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld for download scripts and Google Drive archive links.",
+        "Extract contents into data/raw/wildrf."
+      ],
+      "notes": "Evaluation-only benchmark to diagnose robustness against uncontrolled real-world social media artifacts."
+    },
+    "chameleon": {
+      "name": "chameleon",
+      "display_name": "Chameleon (AIDE Benchmark)",
+      "version": "1.0 (2024)",
+      "source": "https://github.com/shilinyan99/AIDE",
+      "evaluation_role": "Optional external benchmark (test-only, evaluation hierarchy level 6)",
+      "real_source": "High-quality professional photography (Unsplash, RAISE, photographic datasets)",
+      "fake_generators": [
+        "Human-hard photorealistic modern generative models curated to fool human observers"
+      ],
+      "image_count": {
+        "real": 3000,
+        "fake": 3000,
+        "total": 6000
+      },
+      "resolution_distribution": "High resolution (1024x1024 and variable high-res photography).",
+      "format_compression": "High quality JPEG and PNG with minimal artifact distortion.",
+      "label_mapping": {
+        "real": 0,
+        "fake": 1
+      },
+      "license": "Restricted research license (agreement required upon request).",
+      "access_requirements": "Requires formal access request via Google Form / author contact as specified in the AIDE repository.",
+      "local_path": "data/raw/chameleon",
+      "generator_subsets": [
+        {
+          "generator_id": "aide_human_hard",
+          "generator_name": "AIDE/Chameleon Human-Hard Deepfakes",
+          "role": "optional_external",
+          "resolution": "High resolution (1024x1024 to 2048x2048+)",
+          "estimated_count": {
+            "total": 6000
+          },
+          "local_path": "data/raw/chameleon",
+          "download_urls": [
+            "https://github.com/shilinyan99/AIDE"
+          ],
+          "notes": "Curated challenging synthetic images where visual artifacts are subtle or imperceptible."
+        }
+      ],
+      "download_instructions": [
+        "Submit access request form via https://github.com/shilinyan99/AIDE.",
+        "Upon approval, download archives and extract into data/raw/chameleon."
+      ],
+      "notes": "Optional benchmark in Stage 1; development and verification can proceed without blocking on access approval."
+    }
+  }
+}
