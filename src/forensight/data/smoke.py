@@ -234,6 +234,22 @@ def generate_smoke_dataset(
     return manifest_paths, manifests
 
 
+def _assert_audit_leakage_clean(leakage_audit: dict[str, Any]) -> None:
+    """Raise ValueError if audit_manifest_leakage reported any leakage.
+
+    Reads the actual contract key returned by
+    forensight.data.audit.audit_manifest_leakage, which is 'has_leakage'
+    (with detail in 'violations'). Earlier code read non-existent keys
+    ('leakage_detected'/'generator_leakage_detected'), so the guard never fired.
+    """
+    if leakage_audit.get("has_leakage"):
+        violations = leakage_audit.get("violations") or []
+        detail = "; ".join(violations) if violations else str(leakage_audit)
+        raise ValueError(
+            f"Dataset audit detected unexpected leakage in smoke dataset: {detail}"
+        )
+
+
 def _locate_or_load_inventory() -> DatasetInventory:
     """Find and load project dataset inventory, falling back to default inventory."""
     candidate_paths = [
@@ -346,10 +362,7 @@ def run_smoke_pipeline(
         },
         check_generators=True,
     )
-    if leakage_audit.get("leakage_detected") or leakage_audit.get("generator_leakage_detected"):
-        raise ValueError(
-            f"Dataset audit detected unexpected leakage in smoke dataset: {leakage_audit}"
-        )
+    _assert_audit_leakage_clean(leakage_audit)
 
     # Image inspection audit on train manifest
     train_audit_report: AuditReport = audit_manifest_images(
@@ -370,7 +383,7 @@ def run_smoke_pipeline(
         "status": "passed",
         "has_critical_findings": train_audit_report.has_critical_findings(),
         "summary_findings_count": len(train_audit_report.summary_findings),
-        "leakage_detected": leakage_audit.get("leakage_detected", False),
+        "leakage_detected": leakage_audit.get("has_leakage", False),
     }
 
     # -------------------------------------------------------------------------

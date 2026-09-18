@@ -22,6 +22,7 @@ import pytest
 from forensight.data.audit import estimate_jpeg_quality
 from forensight.data.smoke import (
     DEFAULT_SYNSET_IDS,
+    _assert_audit_leakage_clean,
     _resolve_classes,
     generate_smoke_dataset,
     run_smoke_pipeline,
@@ -154,6 +155,55 @@ class TestGenerateSmokeDataset:
         validate_no_leakage(train_m, val_m, check_generators=False, strict=True)
         validate_no_leakage(train_m, near_m, check_generators=True, strict=True)
         validate_no_leakage(train_m, cross_m, check_generators=True, strict=True)
+
+
+class TestAuditLeakageGuard:
+    """Tests that the Stage 4 audit-leakage guard reads the correct contract keys.
+
+    Regression: the guard previously read non-existent keys ('leakage_detected',
+    'generator_leakage_detected') instead of 'has_leakage', so it never raised
+    even when audit_manifest_leakage reported real leakage.
+    """
+
+    def _leaking_audit_result(self) -> dict:
+        return {
+            "has_leakage": True,
+            "sample_id_collisions": [
+                {"eval_split": "cross_generator_ood", "count": 1, "colliding_sample_ids": ["s1"]}
+            ],
+            "image_path_collisions": [],
+            "generator_overlaps": [
+                {
+                    "eval_split": "cross_generator_ood",
+                    "train_generators": ["midjourney"],
+                    "eval_generators": ["midjourney"],
+                    "overlapping_generators": ["midjourney"],
+                }
+            ],
+            "violations": [
+                "Sample ID leakage between train and cross_generator_ood: 1 shared IDs.",
+                "Generator leakage between train and cross_generator_ood: overlapping fake generator(s) ['midjourney'].",
+            ],
+        }
+
+    def test_guard_raises_on_reported_leakage(self):
+        with pytest.raises(ValueError, match="leakage"):
+            _assert_audit_leakage_clean(self._leaking_audit_result())
+
+    def test_guard_raises_on_leakage_without_violations_list(self):
+        with pytest.raises(ValueError, match="leakage"):
+            _assert_audit_leakage_clean({"has_leakage": True})
+
+    def test_guard_passes_on_clean_audit(self):
+        clean = {
+            "has_leakage": False,
+            "sample_id_collisions": [],
+            "image_path_collisions": [],
+            "generator_overlaps": [],
+            "violations": [],
+        }
+        # Should not raise
+        _assert_audit_leakage_clean(clean)
 
 
 class TestRunSmokePipeline:
