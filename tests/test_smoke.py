@@ -22,6 +22,7 @@ import pytest
 from forensight.data.audit import estimate_jpeg_quality
 from forensight.data.smoke import (
     DEFAULT_SYNSET_IDS,
+    _resolve_classes,
     generate_smoke_dataset,
     run_smoke_pipeline,
 )
@@ -83,6 +84,19 @@ class TestGenerateSmokeDataset:
 
         _, manifests_7 = generate_smoke_dataset(tmp_path / "c7", num_classes=7)
         assert len(manifests_7["train"]) == 14
+
+    def test_resolve_classes_collision_free(self):
+        classes_small = _resolve_classes(len(DEFAULT_SYNSET_IDS))
+        assert len(classes_small) == len(DEFAULT_SYNSET_IDS)
+        assert len(set(classes_small)) == len(DEFAULT_SYNSET_IDS)
+
+        # Scale to 3500 classes to span beyond synset range and ensure zero duplicates
+        classes_large = _resolve_classes(3500)
+        assert len(classes_large) == 3500
+        assert len(set(classes_large)) == 3500
+        for cls_id in classes_large:
+            assert cls_id.startswith("n")
+            assert len(cls_id) == 9
 
     def test_invalid_num_classes_raises(self, tmp_path: Path):
         with pytest.raises(ValueError, match="num_classes must be positive integer"):

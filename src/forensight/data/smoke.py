@@ -15,13 +15,11 @@ This module implements Task 0.7 of ForenSight Milestone R0:
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 import time
-from typing import Any, Sequence
+from typing import Any
 import numpy as np
 from PIL import Image
 
@@ -74,8 +72,14 @@ def _resolve_classes(num_classes: int) -> list[str]:
     if num_classes <= len(DEFAULT_SYNSET_IDS):
         return DEFAULT_SYNSET_IDS[:num_classes]
     classes = list(DEFAULT_SYNSET_IDS)
-    for i in range(len(DEFAULT_SYNSET_IDS), num_classes):
-        classes.append(f"n{1440764 + i:08d}")
+    seen = set(classes)
+    candidate_id = 1440764 + len(DEFAULT_SYNSET_IDS)
+    while len(classes) < num_classes:
+        candidate = f"n{candidate_id:08d}"
+        if candidate not in seen:
+            seen.add(candidate)
+            classes.append(candidate)
+        candidate_id += 1
     return classes
 
 

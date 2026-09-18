@@ -448,6 +448,25 @@ class EvaluationReport:
         with open(target, "w", encoding="utf-8") as f:
             f.write(self.to_json(indent=indent))
 
+    def to_reproducibility_record(
+        self,
+        split_version: str = "r0-default",
+        config: dict[str, Any] | None = None,
+        notes: str = "",
+        git_commit: Any = None,
+    ) -> Any:
+        """Convert evaluation report to a full ReproducibilityRecord."""
+        from forensight.evaluation.reproducibility import _SENTINEL, create_reproducibility_record
+
+        commit_arg = git_commit if git_commit is not None else _SENTINEL
+        return create_reproducibility_record(
+            report=self,
+            split_version=split_version,
+            config=config,
+            notes=notes,
+            git_commit=commit_arg,
+        )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> EvaluationReport:
         """Construct EvaluationReport from dictionary."""

@@ -22,9 +22,10 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 # Ensure src/ is on sys.path for direct script execution
 _SRC_DIR = Path(__file__).resolve().parent.parent / "src"
@@ -32,6 +33,7 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from forensight.evaluation.metrics import VALID_STRATEGIES
+from forensight.evaluation.reproducibility import create_reproducibility_record
 from forensight.evaluation.runner import (
     EvaluationReport,
     PredictionSet,
@@ -105,6 +107,26 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         "--output-md",
         "-o",
         help="Path to save human-readable Markdown evaluation report.",
+    )
+    parser.add_argument(
+        "--save-reproducibility",
+        "-r",
+        help="Path to save JSON reproducibility record conforming to ForenSight Section 12 schema.",
+    )
+    parser.add_argument(
+        "--split-version",
+        default="r0-default",
+        help="Version tag or identifier of the dataset split (default: 'r0-default').",
+    )
+    parser.add_argument(
+        "--config-file",
+        "-c",
+        help="Optional path to configuration file (JSON) to embed in the reproducibility record.",
+    )
+    parser.add_argument(
+        "--notes",
+        default="",
+        help="Optional experiment notes or rationale to store in the reproducibility record.",
     )
     parser.add_argument(
         "--run-name",
@@ -220,6 +242,35 @@ def main(cli_args: Sequence[str] | None = None) -> int:
                     print(f"  {g:<20} AUROC: {g_auc:<8} Acc: {m.accuracy:.4f}  Recall: {m.recall:.4f}")
             print("=======================================================\n")
 
+    # Config resolution
+    config_dict: dict[str, Any] = {
+        "predictions": str(args.predictions),
+        "val_predictions": str(args.val_predictions) if args.val_predictions else None,
+        "val_split": args.val_split,
+        "threshold_strategy": args.threshold_strategy,
+        "default_threshold": args.default_threshold,
+        "eval_splits": args.eval_splits,
+        "seed": seed_val,
+    }
+    if args.config_file:
+        cfg_path = Path(args.config_file)
+        if not cfg_path.exists():
+            print(f"Error loading config file: File does not exist: {cfg_path}", file=sys.stderr)
+            return 1
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                loaded_cfg = json.load(f)
+            if not isinstance(loaded_cfg, dict):
+                print(
+                    f"Error: Config file must contain a JSON dictionary, got: {type(loaded_cfg).__name__}",
+                    file=sys.stderr,
+                )
+                return 1
+            config_dict = loaded_cfg
+        except Exception as exc:
+            print(f"Error parsing config file {cfg_path}: {exc}", file=sys.stderr)
+            return 1
+
     # 4. Save report files if requested
     if args.output_json:
         report.save_json(args.output_json)
@@ -230,6 +281,21 @@ def main(cli_args: Sequence[str] | None = None) -> int:
         report.save_markdown(args.output_md)
         if not args.quiet:
             print(f"Saved Markdown report to: {args.output_md}")
+
+    # 5. Save reproducibility record if requested
+    if args.save_reproducibility:
+        repro_rec = create_reproducibility_record(
+            run_id=run_name,
+            experiment_name=args.run_name or run_name,
+            split_version=args.split_version,
+            config=config_dict,
+            report=report,
+            seed=seed_val,
+            notes=args.notes,
+        )
+        repro_rec.save_json(args.save_reproducibility)
+        if not args.quiet:
+            print(f"Saved reproducibility record to: {args.save_reproducibility}")
 
     return 0
 
