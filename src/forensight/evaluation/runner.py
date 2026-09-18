@@ -64,17 +64,17 @@ class PredictionRecord:
 
         # Validate label
         try:
-            lbl = int(self.label)
+            lbl_f = float(self.label)
         except (ValueError, TypeError) as exc:
             raise ValueError(
                 f"PredictionRecord label must be 0 (real) or 1 (fake), got: {self.label}"
             ) from exc
 
-        if lbl not in (0, 1):
+        if lbl_f not in (0.0, 1.0):
             raise ValueError(
                 f"PredictionRecord label must be 0 (real) or 1 (fake), got: {self.label}"
             )
-        self.label = lbl
+        self.label = int(lbl_f)
 
         # Validate score
         try:
@@ -91,17 +91,15 @@ class PredictionRecord:
         self.score = sc
 
         # Normalize optional strings
-        if self.split is not None:
-            s_str = str(self.split).strip()
-            self.split = s_str if s_str else None
+        def _clean_str(val: Any) -> str | None:
+            if val is None or pd.isna(val):
+                return None
+            s = str(val).strip()
+            return s if s and s.lower() != "nan" else None
 
-        if self.generator is not None:
-            g_str = str(self.generator).strip()
-            self.generator = g_str if g_str else None
-
-        if self.dataset is not None:
-            d_str = str(self.dataset).strip()
-            self.dataset = d_str if d_str else None
+        self.split = _clean_str(self.split)
+        self.generator = _clean_str(self.generator)
+        self.dataset = _clean_str(self.dataset)
 
         # Validate metadata
         if not isinstance(self.metadata, dict):
@@ -127,66 +125,21 @@ class PredictionRecord:
         if not isinstance(data, dict):
             raise TypeError(f"Expected dict, got {type(data)}")
 
-        # Extract sample_id with aliases
-        sample_id = (
-            data.get("sample_id")
-            if "sample_id" in data
-            else (
-                data.get("id")
-                if "id" in data
-                else (
-                    data.get("image_id")
-                    if "image_id" in data
-                    else (
-                        data.get("path")
-                        if "path" in data
-                        else data.get("image_path")
-                    )
-                )
-            )
-        )
+        def _find_val(d: dict[str, Any], keys: Sequence[str]) -> Any:
+            for k in keys:
+                if k in d and d[k] is not None and not (isinstance(d[k], float) and pd.isna(d[k])):
+                    return d[k]
+            return None
 
-        # Extract label with aliases
-        label = (
-            data.get("label")
-            if "label" in data
-            else (
-                data.get("target")
-                if "target" in data
-                else (
-                    data.get("y_true")
-                    if "y_true" in data
-                    else data.get("ground_truth")
-                )
-            )
-        )
+        def _clean_str(val: Any) -> str | None:
+            if val is None or pd.isna(val):
+                return None
+            s = str(val).strip()
+            return s if s and s.lower() != "nan" else None
 
-        # Extract score with aliases
-        score = (
-            data.get("score")
-            if "score" in data
-            else (
-                data.get("prob")
-                if "prob" in data
-                else (
-                    data.get("probability")
-                    if "probability" in data
-                    else (
-                        data.get("pred")
-                        if "pred" in data
-                        else (
-                            data.get("prediction")
-                            if "prediction" in data
-                            else (
-                                data.get("y_score")
-                                if "y_score" in data
-                                else data.get("y_pred")
-                            )
-                        )
-                    )
-                )
-            )
-        )
+        sample_id = _find_val(data, ["sample_id", "id", "image_id", "path", "image_path"])
+        label = _find_val(data, ["label", "target", "y_true", "ground_truth"])
+        score = _find_val(data, ["score", "prob", "probability", "pred", "prediction", "y_score", "y_pred"])
 
         if sample_id is None:
             raise ValueError(f"Missing required sample_id in prediction record: {data}")
@@ -195,13 +148,15 @@ class PredictionRecord:
         if score is None:
             raise ValueError(f"Missing required score in prediction record: {data}")
 
-        split = data.get("split")
-        generator = data.get("generator")
-        dataset = data.get("dataset")
+        split = _clean_str(data.get("split"))
+        generator = _clean_str(data.get("generator"))
+        dataset = _clean_str(data.get("dataset"))
 
         # Parse metadata
         meta = data.get("metadata", {})
-        if isinstance(meta, str):
+        if meta is None or (not isinstance(meta, dict) and pd.isna(meta)):
+            meta = {}
+        elif isinstance(meta, str):
             try:
                 meta = json.loads(meta) if meta.strip() else {}
             except json.JSONDecodeError:
@@ -240,11 +195,11 @@ class PredictionRecord:
 
         return cls(
             sample_id=str(sample_id),
-            label=int(label),
-            score=float(score),
-            split=str(split).strip() if split is not None and str(split).strip() else None,
-            generator=str(generator).strip() if generator is not None and str(generator).strip() else None,
-            dataset=str(dataset).strip() if dataset is not None and str(dataset).strip() else None,
+            label=label,
+            score=score,
+            split=split,
+            generator=generator,
+            dataset=dataset,
             metadata=meta,
         )
 
@@ -746,29 +701,20 @@ def evaluate_predictions(
     # 3. Determine overall evaluation partition
     # Protocol rule: Test/benchmark overall metrics MUST NOT evaluate on validation or train samples
     # if partitions are present.
+    excluded_splits = {"train", "training"}
+    if val_predictions is None and val_split_name in predictions.splits:
+        excluded_splits.add(val_split_name)
+
     if eval_splits is not None:
         target_splits = set(eval_splits)
         overall_records = predictions.filter(lambda r: r.split in target_splits)
         if len(overall_records) == 0:
             raise ValueError(f"No samples found for specified eval_splits: {eval_splits}")
-    elif val_predictions is not None:
-        # All records in predictions are considered evaluation/test
-        overall_records = predictions
-    elif calibrated:
-        # val_split_name exists inside predictions
-        non_val_non_train = predictions.filter(
-            lambda r: r.split is not None and r.split not in (val_split_name, "train", "training")
-        )
-        if len(non_val_non_train) > 0:
-            overall_records = non_val_non_train
-        else:
-            # If no non-val non-train samples exist, evaluate on all non-train samples, or all predictions
-            non_train = predictions.filter(lambda r: r.split not in ("train", "training"))
-            overall_records = non_train if len(non_train) > 0 else predictions
     else:
-        # Not calibrated on internal split
-        non_train = predictions.filter(lambda r: r.split not in ("train", "training"))
-        overall_records = non_train if len(non_train) > 0 and len(non_train) < len(predictions) else predictions
+        candidate_records = predictions.filter(
+            lambda r: r.split is None or r.split not in excluded_splits
+        )
+        overall_records = candidate_records if len(candidate_records) > 0 else predictions
 
     # 4. Compute overall benchmark metrics
     overall_result = compute_metrics(

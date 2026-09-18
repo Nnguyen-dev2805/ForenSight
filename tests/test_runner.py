@@ -80,6 +80,14 @@ class TestPredictionRecord:
         with pytest.raises(ValueError, match="label must be 0 .* or 1"):
             PredictionRecord(sample_id="s1", label="invalid", score=0.5)
 
+    def test_continuous_float_label_raises(self):
+        with pytest.raises(ValueError, match="label must be 0 .* or 1"):
+            PredictionRecord(sample_id="s1", label=0.5, score=0.8)
+        with pytest.raises(ValueError, match="label must be 0 .* or 1"):
+            PredictionRecord(sample_id="s2", label=1.5, score=0.8)
+        with pytest.raises(ValueError, match="label must be 0 .* or 1"):
+            PredictionRecord(sample_id="s3", label=-0.1, score=0.8)
+
     def test_invalid_score_raises(self):
         with pytest.raises(ValueError, match="score cannot be NaN or infinite"):
             PredictionRecord(sample_id="s1", label=1, score=float("nan"))
@@ -247,6 +255,23 @@ class TestPredictionSet:
         assert np.array_equal(rebuilt.y_true, pset.y_true)
         assert np.allclose(rebuilt.y_scores, pset.y_scores)
 
+    def test_from_dataframe_missing_values_no_nan_strings(self):
+        df = pd.DataFrame([
+            {"sample_id": "s1", "label": 0, "score": 0.1, "split": None, "generator": np.nan, "dataset": None},
+            {"sample_id": "s2", "label": 1, "score": 0.9, "split": np.nan, "generator": "sd14", "dataset": np.nan},
+        ])
+        pset = PredictionSet.from_dataframe(df)
+        assert "nan" not in pset.splits
+        assert "nan" not in pset.generators
+        assert "nan" not in pset.datasets
+        assert pset.splits == set()
+        assert pset.generators == {"sd14"}
+        assert pset.datasets == set()
+        assert pset[0].split is None
+        assert pset[0].generator is None
+        assert pset[0].dataset is None
+
+
     def test_csv_roundtrip(self, sample_records, tmp_path):
         csv_path = tmp_path / "test_preds.csv"
         pset = PredictionSet(sample_records)
@@ -408,6 +433,20 @@ class TestEvaluatePredictions:
         assert report.threshold_metadata["calibrated"] is False
         assert report.threshold_metadata["threshold"] == 0.5
         assert report.threshold_metadata["threshold_source"] == "default_0.5"
+        assert report.run_metadata["evaluated_samples"] == 2
+        assert report.run_metadata["total_samples"] == 4
+
+    def test_unpartitioned_test_records_evaluation(self):
+        # Records with split=None (unpartitioned) evaluated with default threshold
+        records = [
+            PredictionRecord("s1", 0, 0.2),
+            PredictionRecord("s2", 1, 0.8),
+        ]
+        pset = PredictionSet(records)
+        report = evaluate_predictions(pset, default_threshold=0.5)
+        assert report.run_metadata["evaluated_samples"] == 2
+        assert report.threshold_metadata["calibrated"] is False
+        assert report.overall.accuracy == 1.0
 
     def test_single_class_generator_slice_handling(self, benchmark_predictions):
         # Generator 'midjourney' has only fake samples (class 1)
