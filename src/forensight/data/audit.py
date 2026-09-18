@@ -107,6 +107,91 @@ def hamming_distance(h1: str, h2: str) -> int:
     return (int(h1, 16) ^ int(h2, 16)).bit_count()
 
 
+def detect_watermark_shortcuts(img: Image.Image) -> list[str]:
+    """Lightweight heuristic check for watermarks, copyright text, and border shortcuts.
+
+    Inspects:
+    1. EXIF metadata and image info dictionary for known watermark / generator strings.
+    2. Image borders for uniform solid letterbox bands when image interior contains texture.
+
+    Returns:
+        List of detected indicator tags (empty if clean).
+    """
+    indicators: list[str] = []
+
+    # 1. Check metadata and EXIF
+    meta_strings: list[str] = []
+    if hasattr(img, "info") and isinstance(img.info, dict):
+        for k, v in img.info.items():
+            if isinstance(v, str):
+                meta_strings.append(f"{k}:{v}")
+            elif isinstance(v, bytes):
+                try:
+                    meta_strings.append(f"{k}:{v.decode('latin-1', errors='ignore')}")
+                except Exception:
+                    pass
+
+    if hasattr(img, "getexif"):
+        try:
+            exif = img.getexif()
+            if exif:
+                for tag_id, val in exif.items():
+                    if isinstance(val, (str, bytes)):
+                        s_val = (
+                            val.decode("latin-1", errors="ignore")
+                            if isinstance(val, bytes)
+                            else str(val)
+                        )
+                        meta_strings.append(f"exif_{tag_id}:{s_val}")
+        except Exception:
+            pass
+
+    keywords = [
+        "watermark",
+        "copyright",
+        "dall-e",
+        "midjourney",
+        "stable diffusion",
+        "civitai",
+        "novelai",
+        "shutterstock",
+        "getty",
+        "photoshop",
+        "stock",
+    ]
+    meta_blob = " ".join(meta_strings).lower()
+    for kw in keywords:
+        if kw in meta_blob:
+            indicators.append(f"metadata:{kw}")
+
+    # 2. Check for solid letterbox border bands (top or bottom)
+    w, h = img.size
+    if w >= 32 and h >= 32:
+        try:
+            gray = img.convert("L")
+            # Interior region (20% to 80%)
+            center_box = (int(w * 0.2), int(h * 0.2), int(w * 0.8), int(h * 0.8))
+            center_crop = gray.crop(center_box)
+            c_ext = center_crop.getextrema()
+            # If interior has meaningful contrast/texture
+            if c_ext and (c_ext[1] - c_ext[0]) > 20:
+                band_h = max(2, int(h * 0.05))
+                top_ext = gray.crop((0, 0, w, band_h)).getextrema()
+                bottom_ext = gray.crop((0, h - band_h, w, h)).getextrema()
+                has_top = top_ext and (top_ext[1] - top_ext[0]) <= 1
+                has_bottom = bottom_ext and (bottom_ext[1] - bottom_ext[0]) <= 1
+                if has_top and has_bottom:
+                    indicators.append("letterbox_border")
+                elif has_top:
+                    indicators.append("letterbox_top_border")
+                elif has_bottom:
+                    indicators.append("letterbox_bottom_border")
+        except Exception:
+            pass
+
+    return indicators
+
+
 @dataclass
 class ImageAttributes:
     """Extracted physical and forensic attributes of an image file."""
@@ -126,6 +211,7 @@ class ImageAttributes:
     jpeg_quality: int | None
     sha256: str
     phash: str | None = None
+    watermark_indicators: list[str] = field(default_factory=list)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -194,6 +280,7 @@ def extract_image_attributes(
             fmt = (img.format or "UNKNOWN").upper()
             jpeg_quality = estimate_jpeg_quality(img)
             phash_val = compute_dhash(img) if compute_phash else None
+            watermark_indicators = detect_watermark_shortcuts(img)
 
         return ImageAttributes(
             sample_id=sample_id,
@@ -211,6 +298,7 @@ def extract_image_attributes(
             jpeg_quality=jpeg_quality,
             sha256=sha256_hash,
             phash=phash_val,
+            watermark_indicators=watermark_indicators,
             error=None,
         )
     except Exception as e:
@@ -372,6 +460,61 @@ def calculate_class_balance(attrs: Sequence[ManifestRecord | ImageAttributes]) -
     }
 
 
+def calculate_source_balance(
+    attrs: Sequence[ManifestRecord | ImageAttributes],
+) -> dict[str, Any]:
+    """Calculate sample distribution and correlation across dataset sources per label.
+
+    Identifies dataset/source confounds where real and fake images originate from
+    disjoint or heavily skewed data sources (e.g., ImageNet vs GenImage).
+    """
+    sources: dict[str, dict[str, int]] = {}
+    for a in attrs:
+        src = getattr(a, "dataset", None) or "__unassigned__"
+        if src not in sources:
+            sources[src] = {"real": 0, "fake": 0, "total": 0}
+        if a.label == 0:
+            sources[src]["real"] += 1
+        elif a.label == 1:
+            sources[src]["fake"] += 1
+        sources[src]["total"] += 1
+
+    total_real = sum(s["real"] for s in sources.values())
+    total_fake = sum(s["fake"] for s in sources.values())
+
+    by_source: dict[str, dict[str, Any]] = {}
+    max_disparity = 0.0
+    for src, counts in sorted(sources.items()):
+        p_real = round(counts["real"] / total_real, 4) if total_real > 0 else 0.0
+        p_fake = round(counts["fake"] / total_fake, 4) if total_fake > 0 else 0.0
+        disparity = abs(p_real - p_fake)
+        max_disparity = max(max_disparity, disparity)
+        by_source[src] = {
+            "real": counts["real"],
+            "fake": counts["fake"],
+            "total": counts["total"],
+            "prop_of_reals": p_real,
+            "prop_of_fakes": p_fake,
+            "disparity": round(disparity, 4),
+        }
+
+    # Severe correlation occurs when real and fake originate from disjoint sources
+    # or the proportion disparity between real and fake across sources exceeds 50%.
+    is_strongly_correlated = False
+    if total_real > 0 and total_fake > 0 and len(sources) > 1:
+        if max_disparity >= 0.50:
+            is_strongly_correlated = True
+
+    return {
+        "num_sources": len(sources),
+        "total_real": total_real,
+        "total_fake": total_fake,
+        "max_source_disparity": round(max_disparity, 4),
+        "is_strongly_correlated": is_strongly_correlated,
+        "by_source": by_source,
+    }
+
+
 @dataclass
 class AuditReport:
     """Comprehensive dataset audit report containing distribution metrics, leakage flags, and bias findings."""
@@ -388,7 +531,9 @@ class AuditReport:
     format_stats: dict[str, Any]
     compression_stats: dict[str, Any]
     class_balance: dict[str, Any]
-    summary_findings: list[dict[str, Any]]
+    source_balance: dict[str, Any] = field(default_factory=dict)
+    watermark_stats: dict[str, Any] = field(default_factory=dict)
+    summary_findings: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -435,6 +580,7 @@ def audit_manifest_leakage(
         | list[Manifest]
     ),
     check_generators: bool = True,
+    base_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Inspect manifests for sample ID collisions, image path collisions, and generator leakage.
 
@@ -443,6 +589,7 @@ def audit_manifest_leakage(
         eval_manifests: Evaluation manifest(s) as a single Manifest, list of Manifests,
             or dict mapping split names to Manifests.
         check_generators: If True, checks that fake generator sets do not overlap.
+        base_dir: Optional base directory prefix to resolve relative image paths.
 
     Returns:
         Dictionary detailing detected collisions and generator leakage.
@@ -469,8 +616,14 @@ def audit_manifest_leakage(
     else:
         raise TypeError(f"Unsupported eval_manifests type: {type(eval_manifests)}")
 
+    def _resolve_path(raw_path: str) -> Path:
+        p = Path(raw_path)
+        if not p.is_absolute() and base_dir is not None:
+            p = Path(base_dir) / p
+        return p.resolve()
+
     train_ids = {r.sample_id for r in train_m}
-    train_paths = {Path(r.image_path).resolve() for r in train_m}
+    train_paths = {_resolve_path(r.image_path) for r in train_m}
     train_fake_gens = {
         r.generator.lower().strip()
         for r in train_m
@@ -495,7 +648,7 @@ def audit_manifest_leakage(
                 f"Sample ID leakage between train and {split_name}: {len(id_overlap)} shared IDs."
             )
 
-        eval_paths = {Path(r.image_path).resolve() for r in eval_m}
+        eval_paths = {_resolve_path(r.image_path) for r in eval_m}
         path_overlap = train_paths & eval_paths
         if path_overlap:
             image_path_collisions.append({
@@ -514,9 +667,18 @@ def audit_manifest_leakage(
                 if r.label == 1 and r.generator.lower().strip() not in NON_GENERATOR_LABELS
             }
             gen_overlap = train_fake_gens & eval_fake_gens
-            test_split_tags = {r.split for r in eval_m}
-            is_cross_gen = any("cross_generator" in s for s in test_split_tags) or "ood" in split_name.lower()
-            if gen_overlap and is_cross_gen:
+            test_split_tags = {r.split.lower().strip() for r in eval_m}
+            is_ood_split = (
+                any(
+                    s in ("cross_generator_ood", "cross_generator_test", "near_ood")
+                    or "ood" in s
+                    or "cross_generator" in s
+                    for s in test_split_tags
+                )
+                or "ood" in split_name.lower()
+                or "cross_gen" in split_name.lower()
+            )
+            if gen_overlap and is_ood_split:
                 generator_overlaps.append({
                     "eval_split": split_name,
                     "train_generators": sorted(list(train_fake_gens)),
@@ -543,6 +705,7 @@ def audit_manifest_images(
     max_workers: int = 4,
     compute_phash: bool = True,
     near_duplicate_threshold: int = 2,
+    max_near_duplicate_candidates: int = 2500,
     leakage_check_results: dict[str, Any] | None = None,
 ) -> AuditReport:
     """Run comprehensive image inspection and bias quantification on a manifest.
@@ -554,6 +717,7 @@ def audit_manifest_images(
         max_workers: Number of concurrent threads for image attribute extraction.
         compute_phash: Whether to compute perceptual dHash for near-duplicate analysis.
         near_duplicate_threshold: Hamming distance threshold for flagging near duplicates.
+        max_near_duplicate_candidates: Maximum candidate images for pairwise dHash comparison.
         leakage_check_results: Optional leakage check results from audit_manifest_leakage.
 
     Returns:
@@ -622,9 +786,10 @@ def audit_manifest_images(
 
     # 3. Near-duplicate check (dHash Hamming distance)
     near_duplicate_check: list[dict[str, Any]] = []
+    near_dup_skipped = False
     if compute_phash:
         phash_candidates = [a for a in valid_attrs if a.phash is not None]
-        if len(phash_candidates) <= 2500:
+        if len(phash_candidates) <= max_near_duplicate_candidates:
             for i in range(len(phash_candidates)):
                 a1 = phash_candidates[i]
                 h1 = int(a1.phash, 16)
@@ -644,6 +809,8 @@ def audit_manifest_images(
                             "cross_label": a1.label != a2.label,
                             "cross_split": a1.split != a2.split,
                         })
+        else:
+            near_dup_skipped = True
 
     # 4. Resolution statistics (literature confound: GenImage resolution disparity)
     resolution_stats = {
@@ -699,7 +866,25 @@ def audit_manifest_images(
     # 7. Class balance
     class_balance = calculate_class_balance(records)
 
-    # 8. Leakage summaries
+    # 8. Source balance & correlation
+    source_balance = calculate_source_balance(records)
+
+    # 9. Watermark statistics & shortcuts
+    real_wm = [a for a in real_attrs if a.watermark_indicators]
+    fake_wm = [a for a in fake_attrs if a.watermark_indicators]
+    valid_wm = [a for a in valid_attrs if a.watermark_indicators]
+
+    watermark_stats = {
+        "total_flagged": len(valid_wm),
+        "real_flagged": len(real_wm),
+        "fake_flagged": len(fake_wm),
+        "sample_indicators": [
+            {"sample_id": a.sample_id, "label": a.label, "indicators": a.watermark_indicators}
+            for a in valid_wm[:10]
+        ],
+    }
+
+    # 10. Leakage summaries
     generator_leakage: list[dict[str, Any]] = []
     sample_leakage: list[dict[str, Any]] = []
     if leakage_check_results:
@@ -709,7 +894,7 @@ def audit_manifest_images(
             + leakage_check_results.get("image_path_collisions", [])
         )
 
-    # 9. Formulate summary findings & flags
+    # 11. Formulate summary findings & flags
     summary_findings: list[dict[str, Any]] = []
 
     # Finding 1: Exact Duplicates
@@ -755,7 +940,29 @@ def audit_manifest_images(
             })
 
     # Finding 2: Near Duplicates
-    if not near_duplicate_check:
+    if not compute_phash:
+        summary_findings.append({
+            "check": "near_duplicates",
+            "status": "SKIPPED",
+            "severity": "INFO",
+            "message": "Near-duplicate check disabled (compute_phash=False).",
+        })
+    elif near_dup_skipped:
+        summary_findings.append({
+            "check": "near_duplicates",
+            "status": "SKIPPED",
+            "severity": "INFO",
+            "message": (
+                f"Near-duplicate check skipped: sample size ({len(phash_candidates)}) "
+                f"exceeds pairwise limit ({max_near_duplicate_candidates}). "
+                "Use subsampling or indexed search."
+            ),
+            "details": {
+                "candidate_count": len(phash_candidates),
+                "limit": max_near_duplicate_candidates,
+            },
+        })
+    elif not near_duplicate_check:
         summary_findings.append({
             "check": "near_duplicates",
             "status": "PASS",
@@ -930,7 +1137,61 @@ def audit_manifest_images(
             "message": f"All {class_balance.get('num_classes', 0)} classes have balanced real and fake representation.",
         })
 
-    # Finding 9: File read errors
+    # Finding 9: Source-Label Correlation
+    if source_balance.get("is_strongly_correlated"):
+        summary_findings.append({
+            "check": "source_label_correlation",
+            "status": "WARNING",
+            "severity": "WARNING",
+            "message": (
+                f"Strong source-label correlation detected: Real and fake distributions across dataset sources "
+                f"differ substantially (max disparity: {source_balance['max_source_disparity']:.1%}). "
+                "Detectors risk exploiting dataset/source shortcuts."
+            ),
+            "details": source_balance,
+        })
+    else:
+        summary_findings.append({
+            "check": "source_label_correlation",
+            "status": "PASS",
+            "severity": "INFO",
+            "message": "Real and fake distributions across dataset sources are balanced or single-source.",
+            "details": source_balance,
+        })
+
+    # Finding 10: Watermark Shortcuts
+    if not valid_wm:
+        summary_findings.append({
+            "check": "watermark_shortcuts",
+            "status": "PASS",
+            "severity": "INFO",
+            "message": "No obvious watermark, metadata copyright, or letterbox shortcuts detected.",
+        })
+    else:
+        prop_real_wm = len(real_wm) / len(real_attrs) if real_attrs else 0.0
+        prop_fake_wm = len(fake_wm) / len(fake_attrs) if fake_attrs else 0.0
+        wm_disparity = abs(prop_real_wm - prop_fake_wm)
+        if wm_disparity > 0.05 or len(real_wm) != len(fake_wm):
+            summary_findings.append({
+                "check": "watermark_shortcuts",
+                "status": "WARNING",
+                "severity": "WARNING",
+                "message": (
+                    f"Watermark shortcut alert: Detected {len(valid_wm)} image(s) with watermark indicators "
+                    f"(real: {len(real_wm)}, fake: {len(fake_wm)}). Detectors risk exploiting watermark shortcuts."
+                ),
+                "details": watermark_stats,
+            })
+        else:
+            summary_findings.append({
+                "check": "watermark_shortcuts",
+                "status": "INFO",
+                "severity": "INFO",
+                "message": f"Detected {len(valid_wm)} image(s) with watermark indicators, evenly balanced.",
+                "details": watermark_stats,
+            })
+
+    # Finding 11: File read errors
     read_errors = [a for a in attrs if a.error is not None]
     if read_errors:
         summary_findings.append({
@@ -961,10 +1222,14 @@ def audit_manifest_images(
         format_stats=format_stats,
         compression_stats=compression_stats,
         class_balance=class_balance,
+        source_balance=source_balance,
+        watermark_stats=watermark_stats,
         summary_findings=summary_findings,
         metadata={
             "num_read_errors": len(read_errors),
             "near_duplicate_threshold": near_duplicate_threshold,
+            "near_duplicate_skipped": near_dup_skipped,
+            "max_near_duplicate_candidates": max_near_duplicate_candidates,
         },
     )
 
@@ -1012,7 +1277,12 @@ def generate_audit_markdown(report: AuditReport) -> str:
     lines.append("## 2. Integrity, Duplicates & Leakage")
     lines.append("")
     lines.append(f"- **Exact Duplicates (SHA256 Collisions):** {len(report.duplicate_check)} duplicate group(s)")
-    lines.append(f"- **Near Duplicates (dHash):** {len(report.near_duplicate_check)} near-duplicate pair(s)")
+    near_status = (
+        "SKIPPED (sample size exceeds pairwise limit)"
+        if report.metadata.get("near_duplicate_skipped")
+        else f"{len(report.near_duplicate_check)} near-duplicate pair(s)"
+    )
+    lines.append(f"- **Near Duplicates (dHash):** {near_status}")
     lines.append(f"- **Cross-Split Sample Collisions:** {len(report.sample_leakage)} collision(s)")
     lines.append(f"- **Generator Overlaps (Train vs Eval):** {len(report.generator_leakage)} leak(s)")
     lines.append("")
@@ -1130,6 +1400,40 @@ def generate_audit_markdown(report: AuditReport) -> str:
         lines.append(f"- **Classes Missing Fake Samples:** {cb['classes_missing_fake'][:5]}")
     lines.append("")
 
+    # Section 7: Dataset Source Distribution & Correlation
+    lines.append("## 7. Dataset Source Distribution & Correlation")
+    lines.append("")
+    sb = report.source_balance
+    lines.append(f"- **Distinct Sources:** {sb.get('num_sources', 0)} ({', '.join(sb.get('sources', []))})")
+    lines.append(f"- **Strong Source-Label Correlation:** {'YES (WARNING)' if sb.get('is_strongly_correlated') else 'NO (PASS)'}")
+    lines.append(f"- **Max Source Disparity:** {sb.get('max_source_disparity', 0.0):.1%}")
+    lines.append("")
+    lines.append("| Source | Real Count (Prop) | Fake Count (Prop) | Overall Count (Prop) |")
+    lines.append("| :--- | :---: | :---: | :---: |")
+    for src in sb.get("sources", []):
+        r_s = sb.get("real_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
+        f_s = sb.get("fake_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
+        o_s = sb.get("overall_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
+        lines.append(
+            f"| `{src}` | {r_s['count']} ({r_s['proportion']:.1%}) | "
+            f"{f_s['count']} ({f_s['proportion']:.1%}) | {o_s['count']} ({o_s['proportion']:.1%}) |"
+        )
+    lines.append("")
+
+    # Section 8: Watermark & Shortcut Analysis
+    lines.append("## 8. Watermark & Artifact Shortcut Analysis")
+    lines.append("")
+    wm = report.watermark_stats
+    lines.append(f"- **Images with Watermark/Border Indicators:** {wm.get('total_flagged', 0)} "
+                 f"(Real: {wm.get('real_flagged', 0)}, Fake: {wm.get('fake_flagged', 0)})")
+    lines.append("")
+    if wm.get("sample_indicators"):
+        lines.append("### Flagged Sample Indicators (up to 10)")
+        lines.append("")
+        for item in wm["sample_indicators"]:
+            lines.append(f"- **Sample:** `{item['sample_id']}` ({item['label']}): {', '.join(item['indicators'])}")
+        lines.append("")
+
     lines.append("---")
     lines.append("*Report generated by ForenSight Dataset Audit Toolkit (Task 0.3).*")
     lines.append("")
@@ -1148,8 +1452,10 @@ __all__ = [
     "calculate_format_stats",
     "calculate_jpeg_quality_buckets",
     "calculate_resolution_counts",
+    "calculate_source_balance",
     "compute_dhash",
     "compute_file_sha256",
+    "detect_watermark_shortcuts",
     "estimate_jpeg_quality",
     "extract_image_attributes",
     "generate_audit_markdown",

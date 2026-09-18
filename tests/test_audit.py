@@ -18,8 +18,10 @@ from forensight.data.audit import (
     calculate_format_stats,
     calculate_jpeg_quality_buckets,
     calculate_resolution_counts,
+    calculate_source_balance,
     compute_dhash,
     compute_file_sha256,
+    detect_watermark_shortcuts,
     estimate_jpeg_quality,
     extract_image_attributes,
     generate_audit_markdown,
@@ -167,6 +169,28 @@ class TestImageAttributeExtraction:
         assert "Error reading image" in attrs.error
         assert attrs.format == "CORRUPT"
 
+    def test_detect_watermark_shortcuts_metadata(self):
+        im = Image.new("RGB", (100, 100), (128, 128, 128))
+        im.info["comment"] = "Copyright Shutterstock 2024"
+        indicators = detect_watermark_shortcuts(im)
+        assert any("shutterstock" in ind for ind in indicators)
+
+    def test_detect_watermark_shortcuts_letterbox(self):
+        # Create image with texture in center and solid black bars on top and bottom
+        im = Image.new("RGB", (100, 100), (0, 0, 0))
+        # Center rows 20 to 80 textured
+        for y in range(20, 80):
+            for x in range(100):
+                im.putpixel((x, y), ((x * 5) % 255, (y * 5) % 255, 100))
+        indicators = detect_watermark_shortcuts(im)
+        assert any("letterbox" in ind for ind in indicators)
+
+    def test_detect_watermark_shortcuts_clean(self):
+        # Clean uniform or textured image without border
+        im = Image.new("RGB", (100, 100), (128, 128, 128))
+        indicators = detect_watermark_shortcuts(im)
+        assert len(indicators) == 0
+
 
 class TestDistributionStatistics:
     """Unit tests for summary statistics and binning functions."""
@@ -254,6 +278,32 @@ class TestAuditLeakage:
         assert res["has_leakage"] is True
         assert len(res["generator_overlaps"]) == 1
         assert res["generator_overlaps"][0]["overlapping_generators"] == ["sd14"]
+
+    def test_near_ood_generator_leakage_detected(self):
+        train = Manifest([
+            ManifestRecord(sample_id="t1", image_path="/t1.jpg", label=1, dataset="g", generator="sd14", split="train"),
+        ])
+        near_ood = Manifest([
+            ManifestRecord(sample_id="n1", image_path="/n1.jpg", label=1, dataset="g", generator="sd14", split="near_ood"),
+        ])
+        res = audit_manifest_leakage(train, {"near_ood": near_ood}, check_generators=True)
+        assert res["has_leakage"] is True
+        assert len(res["generator_overlaps"]) == 1
+        assert res["generator_overlaps"][0]["overlapping_generators"] == ["sd14"]
+
+    def test_audit_manifest_leakage_with_base_dir(self, tmp_path: Path):
+        train = Manifest([
+            ManifestRecord(sample_id="t1", image_path="images/t1.jpg", label=1, dataset="g", generator="sd14", split="train"),
+        ])
+        eval_m = Manifest([
+            ManifestRecord(sample_id="e1", image_path="images/t1.jpg", label=1, dataset="g", generator="sd15", split="val"),
+        ])
+        # Resolving relative paths with base_dir should flag image path collision
+        res = audit_manifest_leakage(train, {"val": eval_m}, base_dir=tmp_path)
+        assert res["has_leakage"] is True
+        assert len(res["image_path_collisions"]) == 1
+        expected_path = str(tmp_path / "images/t1.jpg")
+        assert expected_path in res["image_path_collisions"][0]["colliding_paths"]
 
 
 class TestAuditManifestImages:
@@ -488,3 +538,70 @@ class TestAuditEdgeCasesAndFeatures:
         loaded = json.loads(json_file.read_text(encoding="utf-8"))
         assert loaded["total_samples"] == 1
         assert "ForenSight Dataset Audit Report" in md_file.read_text(encoding="utf-8")
+
+    def test_near_duplicate_skipped_when_exceeding_limit(self, synthetic_image_dir: Path):
+        records = [
+            ManifestRecord(sample_id=f"r_{i}", image_path=str(synthetic_image_dir / f"real_{i}.jpg"), label=0, dataset="g", generator="nature", split="train")
+            for i in range(5)
+        ]
+        # Set max_near_duplicate_candidates=3 so 5 records exceeds it and triggers skip
+        report = audit_manifest_images(records, compute_phash=True, max_near_duplicate_candidates=3)
+        assert report.metadata.get("near_duplicate_skipped") is True
+        finding = next(f for f in report.summary_findings if f["check"] == "near_duplicates")
+        assert finding["status"] == "SKIPPED"
+        assert "exceeds pairwise limit" in finding["message"]
+
+        md = report.generate_markdown()
+        assert "SKIPPED (sample size exceeds pairwise limit)" in md
+
+    def test_source_balance_and_correlation_finding(self, synthetic_image_dir: Path):
+        # Real images come from dataset 'source_a', fake images from 'source_b'
+        records = [
+            ManifestRecord(sample_id="r1", image_path=str(synthetic_image_dir / "real_0.jpg"), label=0, dataset="source_a", generator="nature", split="train"),
+            ManifestRecord(sample_id="f1", image_path=str(synthetic_image_dir / "fake_0.jpg"), label=1, dataset="source_b", generator="sd14", split="train"),
+        ]
+        report = audit_manifest_images(records)
+        sb = report.source_balance
+        assert sb["is_strongly_correlated"] is True
+        assert sb["num_sources"] == 2
+        assert sb["max_source_disparity"] == 1.0
+
+        finding = next(f for f in report.summary_findings if f["check"] == "source_label_correlation")
+        assert finding["status"] == "WARNING"
+        assert "Strong source-label correlation detected" in finding["message"]
+
+        md = report.generate_markdown()
+        assert "## 7. Dataset Source Distribution & Correlation" in md
+        assert "Strong Source-Label Correlation:** YES (WARNING)" in md
+
+    def test_watermark_shortcuts_audit_finding(self, tmp_path: Path):
+        # Create one real image with watermark comment and one clean fake image
+        wm_img_path = tmp_path / "watermarked_real.png"
+        clean_img_path = tmp_path / "clean_fake.png"
+
+        from PIL import PngImagePlugin
+
+        im_wm = Image.new("RGB", (64, 64), (100, 100, 100))
+        meta = PngImagePlugin.PngInfo()
+        meta.add_text("comment", "stock watermark")
+        im_wm.save(wm_img_path, format="PNG", pnginfo=meta)
+
+        im_clean = Image.new("RGB", (64, 64), (200, 200, 200))
+        im_clean.save(clean_img_path)
+
+        records = [
+            ManifestRecord(sample_id="wm_real", image_path=str(wm_img_path), label=0, dataset="g", generator="nature", split="train"),
+            ManifestRecord(sample_id="clean_fake", image_path=str(clean_img_path), label=1, dataset="g", generator="sd14", split="train"),
+        ]
+        report = audit_manifest_images(records)
+        assert report.watermark_stats["total_flagged"] == 1
+        assert report.watermark_stats["real_flagged"] == 1
+        assert report.watermark_stats["fake_flagged"] == 0
+
+        finding = next(f for f in report.summary_findings if f["check"] == "watermark_shortcuts")
+        assert finding["status"] == "WARNING"
+        assert "Watermark shortcut alert" in finding["message"]
+
+        md = report.generate_markdown()
+        assert "## 8. Watermark & Artifact Shortcut Analysis" in md
+        assert "Images with Watermark/Border Indicators:** 1 (Real: 1, Fake: 0)" in md

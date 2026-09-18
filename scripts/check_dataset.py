@@ -156,6 +156,7 @@ def main(cli_args: Sequence[str] | None = None) -> int:
         leakage_results = audit_manifest_leakage(
             train_manifest=train_m,
             eval_manifests=eval_manifest_map,
+            base_dir=args.base_dir,
             check_generators=True,
         )
 
