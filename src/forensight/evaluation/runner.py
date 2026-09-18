@@ -414,6 +414,7 @@ class EvaluationReport:
                             and validation partition provenance.
         run_metadata: Execution metadata (e.g., run_name, timestamp, total samples, evaluated samples).
         by_dataset: Optional mapping from dataset name to MetricResult.
+        seed: Optional random seed associated with this evaluation run.
     """
 
     overall: MetricResult
@@ -422,6 +423,7 @@ class EvaluationReport:
     threshold_metadata: dict[str, Any]
     run_metadata: dict[str, Any]
     by_dataset: dict[str, MetricResult] = field(default_factory=dict)
+    seed: int | str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert report to standard serializable dictionary."""
@@ -432,6 +434,7 @@ class EvaluationReport:
             "by_dataset": {k: v.to_dict() for k, v in self.by_dataset.items()},
             "threshold_metadata": dict(self.threshold_metadata),
             "run_metadata": dict(self.run_metadata),
+            "seed": self.seed,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -458,6 +461,10 @@ class EvaluationReport:
         by_dataset = {
             k: MetricResult.from_dict(v) for k, v in data.get("by_dataset", {}).items()
         }
+        seed = data.get("seed")
+        if seed is None and isinstance(data.get("run_metadata"), dict):
+            seed = data["run_metadata"].get("seed")
+
         return cls(
             overall=overall,
             by_split=by_split,
@@ -465,6 +472,7 @@ class EvaluationReport:
             threshold_metadata=dict(data.get("threshold_metadata", {})),
             run_metadata=dict(data.get("run_metadata", {})),
             by_dataset=by_dataset,
+            seed=seed,
         )
 
     @classmethod
@@ -483,6 +491,8 @@ class EvaluationReport:
 
         lines.append(f"# ForenSight Evaluation Report: `{run_name}`\n")
         lines.append(f"- **Timestamp:** `{timestamp}`")
+        if self.seed is not None:
+            lines.append(f"- **Seed:** `{self.seed}`")
         lines.append(f"- **Total Samples:** {total_samples}")
         lines.append(f"- **Evaluated Samples (Overall):** {eval_samples}")
 
@@ -620,6 +630,7 @@ def evaluate_predictions(
     val_predictions: PredictionSet | None = None,
     eval_splits: Sequence[str] | None = None,
     run_metadata: dict[str, Any] | None = None,
+    seed: int | str | None = None,
 ) -> EvaluationReport:
     """Evaluate predictions, calibrating decision threshold on validation data.
 
@@ -637,6 +648,7 @@ def evaluate_predictions(
         val_predictions: Optional separate PredictionSet dedicated to validation threshold tuning.
         eval_splits: Optional explicit list of split names to include in overall benchmark.
         run_metadata: Optional additional metadata to embed in the evaluation report.
+        seed: Optional random seed associated with this evaluation run.
 
     Returns:
         EvaluationReport: Comprehensive report with overall, split, and generator breakdowns.
@@ -761,6 +773,10 @@ def evaluate_predictions(
             )
 
     # 8. Build run metadata
+    seed_val = seed
+    if seed_val is None and run_metadata:
+        seed_val = run_metadata.get("seed")
+
     run_meta: dict[str, Any] = {
         "run_name": (run_metadata.get("run_name") if run_metadata else None) or "evaluation_run",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -770,6 +786,8 @@ def evaluate_predictions(
         "generators": sorted(list(predictions.generators)),
         "datasets": sorted(list(predictions.datasets)),
     }
+    if seed_val is not None:
+        run_meta["seed"] = seed_val
     if run_metadata:
         for k, v in run_metadata.items():
             if k not in run_meta:
@@ -782,4 +800,5 @@ def evaluate_predictions(
         threshold_metadata=threshold_metadata,
         run_metadata=run_meta,
         by_dataset=by_dataset,
+        seed=seed_val,
     )

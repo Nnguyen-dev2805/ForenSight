@@ -1,5 +1,11 @@
 """Evaluation utilities and metrics for ForenSight."""
 
+from forensight.evaluation.aggregate import (
+    AggregatedEvaluationReport,
+    AggregatedMetric,
+    AggregatedSlice,
+    aggregate_reports,
+)
 from forensight.evaluation.metrics import (
     MetricResult,
     VALID_STRATEGIES,
@@ -16,11 +22,15 @@ from forensight.evaluation.runner import (
 )
 
 __all__ = [
+    "AggregatedEvaluationReport",
+    "AggregatedMetric",
+    "AggregatedSlice",
     "EvaluationReport",
     "MetricResult",
     "PredictionRecord",
     "PredictionSet",
     "VALID_STRATEGIES",
+    "aggregate_reports",
     "calculate_auroc",
     "compute_metrics",
     "evaluate_predictions",

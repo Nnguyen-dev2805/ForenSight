@@ -26,6 +26,11 @@ from pathlib import Path
 import sys
 from typing import Sequence
 
+# Ensure src/ is on sys.path for direct script execution
+_SRC_DIR = Path(__file__).resolve().parent.parent / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 from forensight.evaluation.metrics import VALID_STRATEGIES
 from forensight.evaluation.runner import (
     EvaluationReport,
@@ -107,6 +112,10 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Optional identifier or name for this evaluation run.",
     )
     parser.add_argument(
+        "--seed",
+        help="Random seed for this run (e.g. 42).",
+    )
+    parser.add_argument(
         "--print-markdown",
         action="store_true",
         help="Print full Markdown report to stdout instead of summary table.",
@@ -148,6 +157,13 @@ def main(cli_args: Sequence[str] | None = None) -> int:
     if args.val_predictions:
         run_meta["val_predictions_path"] = str(args.val_predictions)
 
+    seed_val: int | str | None = None
+    if args.seed is not None:
+        try:
+            seed_val = int(args.seed)
+        except ValueError:
+            seed_val = str(args.seed).strip()
+
     try:
         report = evaluate_predictions(
             predictions=preds,
@@ -157,6 +173,7 @@ def main(cli_args: Sequence[str] | None = None) -> int:
             val_predictions=val_preds,
             eval_splits=args.eval_splits,
             run_metadata=run_meta,
+            seed=seed_val,
         )
     except Exception as exc:
         print(f"Evaluation failed: {exc}", file=sys.stderr)
