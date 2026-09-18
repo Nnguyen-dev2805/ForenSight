@@ -3,6 +3,7 @@
 from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
+import warnings
 import numpy as np
 import pandas as pd
 import pytest
@@ -99,6 +100,14 @@ class TestInputValidation:
         y_scores = [0.1, 0.9, 0.2, 0.8]
         yt, _ = _validate_and_convert_inputs(y_true, y_scores)
         assert np.array_equal(yt, np.array([0, 1, 0, 1]))
+
+    def test_string_inputs_raise_value_error(self):
+        with pytest.raises(ValueError, match="Failed to convert inputs to numerical arrays"):
+            _validate_and_convert_inputs(["real", "fake"], [0.1, 0.9])
+        with pytest.raises(ValueError, match="Failed to convert inputs to numerical arrays"):
+            _validate_and_convert_inputs([0, 1], ["low", "high"])
+        with pytest.raises(ValueError, match="Failed to convert inputs to numerical arrays"):
+            compute_metrics(["real", "fake"], [0.1, 0.9])
 
 
 class TestAUROCCalculation:
@@ -200,6 +209,62 @@ class TestThresholdSelection:
         y_scores = [0.6, 0.6]
         thresh = select_threshold(y_true, y_scores, strategy="accuracy")
         assert thresh == pytest.approx(0.6, abs=1e-5)
+
+    def test_select_threshold_f1_no_runtime_warning_when_negatives_highest(self):
+        # Inverted scores where negative samples (reals) have highest scores
+        y_true = [0, 0, 0, 1, 1]
+        y_scores = [0.95, 0.85, 0.75, 0.25, 0.15]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            thresh = select_threshold(y_true, y_scores, strategy="f1")
+        assert isinstance(thresh, float)
+
+    def test_threshold_tie_breaking_rtol_zero(self):
+        # Construct large dataset where two candidate thresholds differ in metric by < 1e-5.
+        # With default rtol=1e-5, np.isclose would treat them as tied and pick the candidate closer to 0.5.
+        # With rtol=0.0, the candidate with strictly higher metric is correctly selected.
+        n_samples = 200000
+        y_true = np.zeros(n_samples, dtype=int)
+        y_scores = np.zeros(n_samples, dtype=float)
+        y_true[100000:] = 1  # 100k reals, 100k fakes
+
+        # Reals: 99998 at 0.1, 1 at 0.6, 1 at 0.7
+        y_scores[:99998] = 0.1
+        y_scores[99998] = 0.6
+        y_scores[99999] = 0.7
+
+        # Fakes: 1 at 0.4, 99999 at 0.9
+        y_scores[100000] = 0.4
+        y_scores[100001:] = 0.9
+
+        # At threshold 0.8: accuracy = 199999 / 200000 = 0.999995
+        # At threshold 0.5: accuracy = 199997 / 200000 = 0.999985
+        # |0.8 - 0.5| = 0.3, |0.5 - 0.5| = 0.0
+        thresh = select_threshold(y_true, y_scores, strategy="accuracy")
+        assert thresh == pytest.approx(0.8, abs=1e-5)
+
+    def test_candidate_upper_bound_reaches_all_negative_boundary(self):
+        # 9 reals with scores 0.1..0.9, 1 fake with score 0.05
+        # If we threshold above max score (0.9), all 10 are predicted 0 -> accuracy = 9/10 = 0.90
+        # If thresholding at 0.9, real with 0.9 is predicted 1 -> accuracy = 8/10 = 0.80
+        y_true = [0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        y_scores = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.05]
+        thresh = select_threshold(y_true, y_scores, strategy="accuracy")
+        assert thresh > 0.9
+        res = compute_metrics(y_true, y_scores, threshold=thresh)
+        assert res.accuracy == 0.9
+        assert res.confusion_matrix == {"tp": 0, "fp": 0, "tn": 9, "fn": 1}
+
+    def test_logit_scores_outside_unit_interval(self):
+        # Model producing unbounded logits
+        y_true = [0, 0, 1, 1]
+        y_scores = [-4.5, -1.2, 2.3, 6.8]
+        thresh = select_threshold(y_true, y_scores, strategy="f1")
+        res = compute_metrics(y_true, y_scores, threshold=thresh)
+        assert res.auroc == 1.0
+        assert res.accuracy == 1.0
+        assert res.f1 == 1.0
+        assert -1.2 < thresh <= 2.3
 
 
 class TestComputeMetrics:
@@ -427,4 +492,32 @@ class TestMetricResultSerialization:
                 threshold=0.5,
                 threshold_source="default_0.5",
                 confusion_matrix={"tp": 1, "fp": 0},  # missing tn, fn
+            )
+
+    def test_boolean_types_rejected_in_post_init(self):
+        cm = {"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        # Booleans should not pass as floats
+        with pytest.raises(TypeError, match="accuracy must be float"):
+            MetricResult(
+                auroc=0.9,
+                accuracy=True,  # type: ignore[arg-type]
+                f1=0.8,
+                precision=0.8,
+                recall=0.8,
+                threshold=0.5,
+                threshold_source="default_0.5",
+                confusion_matrix=cm,
+            )
+
+        # Booleans should not pass as confusion matrix ints
+        with pytest.raises(TypeError, match="confusion_matrix\\['tp'\\] must be an integer"):
+            MetricResult(
+                auroc=0.9,
+                accuracy=0.8,
+                f1=0.8,
+                precision=0.8,
+                recall=0.8,
+                threshold=0.5,
+                threshold_source="default_0.5",
+                confusion_matrix={"tp": True, "fp": 0, "tn": 1, "fn": 0},  # type: ignore[dict-item]
             )

@@ -42,7 +42,7 @@ def _validate_and_convert_inputs(
     """
     # Convert inputs to numpy arrays
     try:
-        y_t = np.asarray(y_true)
+        y_t = np.asarray(y_true, dtype=np.float64)
         y_s = np.asarray(y_scores, dtype=np.float64)
     except (ValueError, TypeError) as exc:
         raise ValueError(f"Failed to convert inputs to numerical arrays: {exc}") from exc
@@ -81,7 +81,7 @@ def _validate_and_convert_inputs(
     # Check binary label validity {0, 1}
     unique_labels = np.unique(y_t)
     for lbl in unique_labels:
-        if lbl not in (0, 1, 0.0, 1.0, False, True):
+        if lbl not in (0.0, 1.0):
             raise ValueError(
                 f"y_true must contain only binary labels (0 for real, 1 for fake). Found invalid label: {lbl}"
             )
@@ -116,17 +116,20 @@ class MetricResult:
 
     def __post_init__(self) -> None:
         """Validate result fields and types."""
-        if self.auroc is not None and not isinstance(self.auroc, (int, float)):
+        def _is_numeric(val: Any) -> bool:
+            return isinstance(val, (int, float)) and not isinstance(val, bool)
+
+        if self.auroc is not None and not _is_numeric(self.auroc):
             raise TypeError(f"auroc must be float or None, got {type(self.auroc)}")
-        if not isinstance(self.accuracy, (int, float)):
+        if not _is_numeric(self.accuracy):
             raise TypeError(f"accuracy must be float, got {type(self.accuracy)}")
-        if not isinstance(self.f1, (int, float)):
+        if not _is_numeric(self.f1):
             raise TypeError(f"f1 must be float, got {type(self.f1)}")
-        if not isinstance(self.precision, (int, float)):
+        if not _is_numeric(self.precision):
             raise TypeError(f"precision must be float, got {type(self.precision)}")
-        if not isinstance(self.recall, (int, float)):
+        if not _is_numeric(self.recall):
             raise TypeError(f"recall must be float, got {type(self.recall)}")
-        if not isinstance(self.threshold, (int, float)):
+        if not _is_numeric(self.threshold):
             raise TypeError(f"threshold must be float, got {type(self.threshold)}")
         if not isinstance(self.threshold_source, str) or not self.threshold_source.strip():
             raise ValueError("threshold_source must be a non-empty string.")
@@ -136,7 +139,7 @@ class MetricResult:
             raise ValueError(f"confusion_matrix must be a dict with keys {required_cm_keys}")
 
         for k, v in self.confusion_matrix.items():
-            if not isinstance(v, (int, np.integer)):
+            if not (isinstance(v, (int, np.integer)) and not isinstance(v, bool)):
                 raise TypeError(f"confusion_matrix['{k}'] must be an integer, got {type(v)}")
 
     def to_dict(self) -> dict[str, Any]:
@@ -274,18 +277,18 @@ def select_threshold(
     y_t_sorted = y_t[order]
     n_samples = len(y_s_sorted)
 
-    # Build candidate thresholds: unique observed scores + midpoints between consecutive scores
+    # Build candidate thresholds: unique observed scores + midpoints + upper bound beyond max
     unique_scores = np.unique(y_s_sorted)
+    upper_bound = np.nextafter(unique_scores.max(), np.inf)
     if len(unique_scores) > 1:
         midpoints = (unique_scores[:-1] + unique_scores[1:]) / 2.0
+        candidate_list = [unique_scores, midpoints, [upper_bound]]
         # Include default_threshold if it falls within data range
-        if unique_scores.min() <= default_threshold <= unique_scores.max():
-            candidate_list = [unique_scores, midpoints, [default_threshold]]
-        else:
-            candidate_list = [unique_scores, midpoints]
+        if unique_scores.min() <= default_threshold <= upper_bound:
+            candidate_list.append([default_threshold])
         candidates = np.unique(np.concatenate(candidate_list))
     else:
-        candidates = unique_scores
+        candidates = np.unique(np.concatenate([unique_scores, [upper_bound]]))
 
     # Vectorized confusion matrix computation for all candidate thresholds
     # idx is the first index where y_s_sorted >= candidate
@@ -303,11 +306,8 @@ def select_threshold(
 
     # Evaluate metric array based on strategy
     if strat == "f1":
-        denom_prec = tp + fp
-        prec = np.where(denom_prec > 0, tp / denom_prec, 0.0)
-        rec = tp / total_pos  # total_pos > 0 guaranteed
-        denom_f1 = prec + rec
-        metric_vals = np.where(denom_f1 > 0, (2.0 * prec * rec) / denom_f1, 0.0)
+        denom_f1 = total_pos + tp + fp
+        metric_vals = (2.0 * tp) / denom_f1
     elif strat == "accuracy":
         metric_vals = (tp + tn) / n_samples
     elif strat == "youden":
@@ -320,7 +320,7 @@ def select_threshold(
 
     # Identify candidate(s) maximizing the metric
     max_val = np.max(metric_vals)
-    best_mask = np.isclose(metric_vals, max_val, atol=1e-12)
+    best_mask = np.isclose(metric_vals, max_val, rtol=0.0, atol=1e-12)
     tied_candidates = candidates[best_mask]
 
     # Deterministic tie-breaking:
