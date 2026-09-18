@@ -573,6 +573,9 @@ class TestAuditEdgeCasesAndFeatures:
         md = report.generate_markdown()
         assert "## 7. Dataset Source Distribution & Correlation" in md
         assert "Strong Source-Label Correlation:** YES (WARNING)" in md
+        assert "- **Distinct Sources:** 2 (source_a, source_b)" in md
+        assert "| `source_a` | 1 (100.0%) | 0 (0.0%) | 1 (50.0%) |" in md
+        assert "| `source_b` | 0 (0.0%) | 1 (100.0%) | 1 (50.0%) |" in md
 
     def test_watermark_shortcuts_audit_finding(self, tmp_path: Path):
         # Create one real image with watermark comment and one clean fake image

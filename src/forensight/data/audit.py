@@ -1404,19 +1404,26 @@ def generate_audit_markdown(report: AuditReport) -> str:
     lines.append("## 7. Dataset Source Distribution & Correlation")
     lines.append("")
     sb = report.source_balance
-    lines.append(f"- **Distinct Sources:** {sb.get('num_sources', 0)} ({', '.join(sb.get('sources', []))})")
+    by_source = sb.get("by_source", {})
+    sources_list = sorted(by_source.keys())
+    lines.append(f"- **Distinct Sources:** {sb.get('num_sources', 0)} ({', '.join(sources_list)})")
     lines.append(f"- **Strong Source-Label Correlation:** {'YES (WARNING)' if sb.get('is_strongly_correlated') else 'NO (PASS)'}")
     lines.append(f"- **Max Source Disparity:** {sb.get('max_source_disparity', 0.0):.1%}")
     lines.append("")
     lines.append("| Source | Real Count (Prop) | Fake Count (Prop) | Overall Count (Prop) |")
     lines.append("| :--- | :---: | :---: | :---: |")
-    for src in sb.get("sources", []):
-        r_s = sb.get("real_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
-        f_s = sb.get("fake_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
-        o_s = sb.get("overall_distribution", {}).get(src, {"count": 0, "proportion": 0.0})
+    total_samples = sb.get("total_real", 0) + sb.get("total_fake", 0)
+    for src in sources_list:
+        s_data = by_source[src]
+        r_cnt = s_data.get("real", 0)
+        r_prop = s_data.get("prop_of_reals", 0.0)
+        f_cnt = s_data.get("fake", 0)
+        f_prop = s_data.get("prop_of_fakes", 0.0)
+        t_cnt = s_data.get("total", 0)
+        t_prop = (t_cnt / total_samples) if total_samples > 0 else 0.0
         lines.append(
-            f"| `{src}` | {r_s['count']} ({r_s['proportion']:.1%}) | "
-            f"{f_s['count']} ({f_s['proportion']:.1%}) | {o_s['count']} ({o_s['proportion']:.1%}) |"
+            f"| `{src}` | {r_cnt} ({r_prop:.1%}) | "
+            f"{f_cnt} ({f_prop:.1%}) | {t_cnt} ({t_prop:.1%}) |"
         )
     lines.append("")
 
