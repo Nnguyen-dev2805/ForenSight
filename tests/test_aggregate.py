@@ -141,6 +141,15 @@ class TestAggregatedMetric:
         assert m.n == 2
         assert m.mean == pytest.approx(0.85)
 
+    def test_string_nan_and_none_filtering(self):
+        # Cleanly filter out string "nan" and None
+        values = [0.80, "nan", None]
+        m = AggregatedMetric.from_values(values)
+        assert m is not None
+        assert m.n == 1
+        assert m.mean == pytest.approx(0.80)
+        assert m.std == 0.0
+
     def test_none_mean_formatted(self):
         m = AggregatedMetric(mean=None, std=None, min=None, max=None, n=0)
         assert m.formatted == "N/A"
@@ -202,6 +211,8 @@ class TestAggregatedSlice:
         assert sl.auroc is None
         assert sl["auroc"] is None
         assert sl.get("auroc") is None
+        assert sl.get("auroc", default="fallback") is None
+        assert sl.get("nonexistent", default="fallback") == "fallback"
         assert sl.accuracy.mean == pytest.approx(0.92)
         assert sl.recall.mean == pytest.approx(0.92)
 
@@ -213,6 +224,14 @@ class TestAggregatedSlice:
         rebuilt = AggregatedSlice.from_dict(d)
         assert rebuilt.auroc is None
         assert rebuilt.accuracy.mean == pytest.approx(0.92)
+
+    def test_slice_getitem_rejects_arbitrary_attributes(self):
+        results = [make_metric_result(auroc=0.80, accuracy=0.75)]
+        sl = AggregatedSlice.from_metric_results(results)
+        with pytest.raises(KeyError, match="Metric 'to_dict' not found"):
+            _ = sl["to_dict"]
+        with pytest.raises(KeyError, match="Metric 'from_dict' not found"):
+            _ = sl["from_dict"]
 
     def test_slice_empty_raises(self):
         with pytest.raises(ValueError, match="Cannot aggregate empty list"):
@@ -285,6 +304,34 @@ class TestAggregateReports:
         assert agg.overall.auroc.std == pytest.approx(0.02)
         assert agg.overall.accuracy.mean == pytest.approx(0.80)
         assert agg.overall.accuracy.std == pytest.approx(0.02)
+
+    def test_three_runs_with_duplicate_seeds_is_preliminary(self):
+        # Even with 3 runs, if all seeds are identical (e.g. 42), the benchmark cannot be sealed
+        r1 = make_dummy_report(seed=42)
+        r2 = make_dummy_report(seed=42)
+        r3 = make_dummy_report(seed=42)
+        agg = aggregate_reports([r1, r2, r3])
+
+        assert agg.num_runs == 3
+        assert agg.seeds == [42, 42, 42]
+        assert agg.is_preliminary is True
+        assert agg.preliminary_result is True
+
+    def test_three_runs_with_seed_none_is_preliminary(self):
+        # 3 unseeded runs (fallback to run_0, run_1, run_2) cannot be sealed
+        r1 = make_dummy_report(seed=None)
+        r2 = make_dummy_report(seed=None)
+        r3 = make_dummy_report(seed=None)
+        # Ensure seed attribute and metadata are None
+        for r in (r1, r2, r3):
+            r.seed = None
+            r.run_metadata.pop("seed", None)
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.num_runs == 3
+        assert agg.seeds == ["run_0", "run_1", "run_2"]
+        assert agg.is_preliminary is True
+        assert agg.preliminary_result is True
 
     def test_per_split_and_per_generator_aggregation(self):
         r1 = make_dummy_report(seed=1, split_auc=0.85, gen_auc=None)

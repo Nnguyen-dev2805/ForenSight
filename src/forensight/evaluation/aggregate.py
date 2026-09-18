@@ -113,11 +113,14 @@ class AggregatedMetric:
         """
         valid: list[float] = []
         for v in values:
-            if v is not None and not (isinstance(v, float) and np.isnan(v)):
-                try:
-                    valid.append(float(v))
-                except (ValueError, TypeError):
-                    continue
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if not np.isnan(fv):
+                    valid.append(fv)
+            except (ValueError, TypeError):
+                continue
 
         if not valid:
             return None
@@ -139,6 +142,16 @@ class AggregatedMetric:
             max=max_val,
             n=n,
         )
+
+
+KNOWN_METRIC_KEYS: set[str] = {
+    "auroc",
+    "accuracy",
+    "f1",
+    "precision",
+    "recall",
+    "threshold",
+}
 
 
 @dataclass
@@ -180,17 +193,16 @@ class AggregatedSlice:
 
     def __getitem__(self, key: str) -> AggregatedMetric | None:
         """Access metric by name."""
-        if hasattr(self, key):
+        if key in KNOWN_METRIC_KEYS:
             return getattr(self, key)
         if key in self.metrics:
             return self.metrics[key]
         raise KeyError(f"Metric '{key}' not found in AggregatedSlice.")
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Safe metric lookup with default."""
+        """Safe metric lookup with default value for missing keys."""
         try:
-            val = self[key]
-            return default if val is None else val
+            return self[key]
         except KeyError:
             return default
 
@@ -507,7 +519,9 @@ def aggregate_reports(
         seeds.append(seed_val)
 
     num_runs = len(reports)
-    is_preliminary = num_runs < 3
+    # A run requires at least 3 distinct, tracked seeds to be a sealed benchmark
+    tracked_unique_seeds = {s for s in seeds if not str(s).startswith("run_")}
+    is_preliminary = len(tracked_unique_seeds) < 3 or num_runs < 3
 
     # 2. Overall benchmark aggregation
     overall = AggregatedSlice.from_metric_results([r.overall for r in reports])

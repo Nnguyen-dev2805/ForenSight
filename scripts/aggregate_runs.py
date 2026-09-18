@@ -82,12 +82,7 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
 def main(cli_args: Sequence[str] | None = None) -> int:
     """CLI entrypoint for aggregating ForenSight evaluation runs."""
     args = parse_args(cli_args)
-
-    report_paths: list[str] = []
-    for item in args.reports:
-        # Handle cases where multiple files were passed or space-separated
-        report_paths.append(item)
-
+    report_paths: list[str] = list(args.reports)
     if not report_paths:
         print("Error: No report files specified.", file=sys.stderr)
         return 1
