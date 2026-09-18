@@ -190,10 +190,14 @@ class DatasetInventory:
                 errors.append(f"Entry '{name}' has empty version.")
             if not entry.source:
                 errors.append(f"Entry '{name}' has empty source URL/reference.")
+            if not entry.evaluation_role:
+                errors.append(f"Entry '{name}' has empty evaluation_role.")
             if not entry.real_source:
                 errors.append(f"Entry '{name}' has empty real_source.")
             if not entry.fake_generators:
                 errors.append(f"Entry '{name}' specifies no fake_generators.")
+            if not entry.image_count:
+                errors.append(f"Entry '{name}' has empty image_count.")
             if not entry.resolution_distribution:
                 errors.append(f"Entry '{name}' has empty resolution_distribution.")
             if not entry.format_compression:
@@ -204,14 +208,15 @@ class DatasetInventory:
                 errors.append(f"Entry '{name}' has empty access_requirements.")
 
             # Label mapping check
-            if "real" not in entry.label_mapping or "fake" not in entry.label_mapping:
+            if set(entry.label_mapping.keys()) != {"real", "fake"}:
                 errors.append(
-                    f"Entry '{name}' label_mapping must contain both 'real' and 'fake' keys."
+                    f"Entry '{name}' label_mapping must have exactly keys {{'real', 'fake'}}, got: {list(entry.label_mapping.keys())}"
                 )
             elif entry.label_mapping["real"] != 0 or entry.label_mapping["fake"] != 1:
                 errors.append(
                     f"Entry '{name}' label_mapping must map real->0 and fake->1, got: {entry.label_mapping}"
                 )
+
 
             # Validate generator subsets if present
             for subset in entry.generator_subsets:

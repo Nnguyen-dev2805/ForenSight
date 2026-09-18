@@ -151,6 +151,21 @@ class TestDatasetInventory:
         with pytest.raises(ValueError, match="Inventory validation failed"):
             inv.validate(strict=True)
 
+    def test_validation_evaluation_role_and_image_count(self):
+        inv = build_default_inventory()
+        inv["genimage"].evaluation_role = ""
+        inv["genimage"].image_count = {}
+        errors = inv.validate()
+        assert any("empty evaluation_role" in err for err in errors)
+        assert any("empty image_count" in err for err in errors)
+
+    def test_validation_label_mapping_exact_keys(self):
+        inv = build_default_inventory()
+        inv["genimage"].label_mapping = {"real": 0, "fake": 1, "extra": 2}
+        errors = inv.validate()
+        assert any("exactly keys" in err for err in errors)
+
+
     def test_json_roundtrip(self, tmp_path):
         inv = build_default_inventory()
         json_path = tmp_path / "test_inventory.json"
