@@ -1,0 +1,38 @@
+.DS_Store
+
+# Local agent/code-index state
+.agents/
+.codegraph/
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Secrets and local environment
+.env
+.env.*
+credentials*.json
+secrets*.json
+*.key
+
+# Notebook state
+.ipynb_checkpoints/
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Dataset artifacts
+data/raw/*
+!data/raw/.gitkeep
+data/derived/*
+!data/derived/.gitkeep
+
+# Generated experiment outputs
+results/*
+!results/.gitkeep
