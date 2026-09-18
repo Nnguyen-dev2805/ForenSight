@@ -29,6 +29,10 @@ from forensight.data.inventory import (
     load_inventory,
     save_inventory,
 )
+from forensight.data.smoke import (
+    generate_smoke_dataset,
+    run_smoke_pipeline,
+)
 from forensight.data.split import (
     NON_GENERATOR_LABELS,
     PROTOCOL_V1_SPLITS,
@@ -73,10 +77,12 @@ __all__ = [
     "estimate_jpeg_quality",
     "extract_image_attributes",
     "generate_audit_markdown",
+    "generate_smoke_dataset",
     "get_default_inventory",
     "get_generator_membership_summary",
     "hamming_distance",
     "load_inventory",
+    "run_smoke_pipeline",
     "save_inventory",
     "subsample_manifest_by_class",
     "validate_no_leakage",

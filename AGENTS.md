@@ -101,10 +101,16 @@ Canonical smoke/unit test:
 
 `python3 -m pytest`
 
-- Repo hiện chưa có canonical executable setup/evaluation commands.
-- Không tự invent command rồi ghi như project standard.
-- Khi executable code tương ứng được thêm, cập nhật section này với command chính
-  xác đã chạy được cho setup và evaluation.
+Canonical end-to-end smoke pipeline:
+
+`python3 scripts/run_smoke_test.py`
+
+- Evaluation runner command:
+  `python3 scripts/run_evaluation.py --predictions <file> --val-split val`
+- Multi-seed aggregation command:
+  `python3 scripts/aggregate_runs.py --reports <report1.json> <report2.json> <report3.json>`
+- Dataset audit command:
+  `python3 scripts/check_dataset.py --manifest <manifest.jsonl>`
 - Trước khi claim completion, chạy verification phù hợp với files đã thay đổi.
 
 ## Reporting
