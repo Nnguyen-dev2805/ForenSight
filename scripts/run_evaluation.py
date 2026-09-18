@@ -266,7 +266,7 @@ def main(cli_args: Sequence[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 return 1
-            config_dict = loaded_cfg
+            config_dict = {**loaded_cfg, **config_dict}
         except Exception as exc:
             print(f"Error parsing config file {cfg_path}: {exc}", file=sys.stderr)
             return 1

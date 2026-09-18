@@ -28,6 +28,7 @@ from forensight.evaluation.metrics import (
     compute_metrics,
     select_threshold,
 )
+from forensight.evaluation.reproducibility import _SENTINEL
 
 
 @dataclass
@@ -453,18 +454,17 @@ class EvaluationReport:
         split_version: str = "r0-default",
         config: dict[str, Any] | None = None,
         notes: str = "",
-        git_commit: Any = None,
+        git_commit: Any = _SENTINEL,
     ) -> Any:
         """Convert evaluation report to a full ReproducibilityRecord."""
-        from forensight.evaluation.reproducibility import _SENTINEL, create_reproducibility_record
+        from forensight.evaluation.reproducibility import create_reproducibility_record
 
-        commit_arg = git_commit if git_commit is not None else _SENTINEL
         return create_reproducibility_record(
             report=self,
             split_version=split_version,
             config=config,
             notes=notes,
-            git_commit=commit_arg,
+            git_commit=git_commit,
         )
 
     @classmethod

@@ -146,6 +146,24 @@ class TestReproducibilityRecordDataclass:
         errors = sample_valid_record.validate()
         assert any("threshold_value" in e for e in errors)
 
+    def test_validate_rejects_boolean_threshold_value(self, sample_valid_record):
+        sample_valid_record.threshold_value = True
+        errors = sample_valid_record.validate()
+        assert any("threshold_value" in e for e in errors)
+
+        sample_valid_record.threshold_value = False
+        errors = sample_valid_record.validate()
+        assert any("threshold_value" in e for e in errors)
+
+    def test_validate_rejects_boolean_seed(self, sample_valid_record):
+        sample_valid_record.seed = True
+        errors = sample_valid_record.validate()
+        assert any("seed" in e for e in errors)
+
+        sample_valid_record.seed = False
+        errors = sample_valid_record.validate()
+        assert any("seed" in e for e in errors)
+
     def test_invalid_types_for_dict_fields(self, sample_valid_record):
         sample_valid_record.config = "not-a-dict"  # type: ignore
         sample_valid_record.metrics = ["not", "a", "dict"]  # type: ignore
@@ -224,6 +242,61 @@ class TestSerialization:
     def test_from_dict_with_invalid_type_raises(self):
         with pytest.raises(TypeError, match="Expected dict"):
             ReproducibilityRecord.from_dict("not-a-dict")  # type: ignore
+
+    def test_from_dict_with_none_or_null_fields(self):
+        data = {
+            "run_id": None,
+            "experiment_name": None,
+            "timestamp": None,
+            "git_commit": None,
+            "seed": None,
+            "split_version": None,
+            "config": None,
+            "threshold_source": None,
+            "threshold_value": None,
+            "metrics": None,
+            "environment": None,
+            "notes": None,
+        }
+        rec = ReproducibilityRecord.from_dict(data)
+        assert rec.run_id == ""
+        assert rec.experiment_name == ""
+        assert rec.timestamp == ""
+        assert rec.git_commit is None
+        assert rec.seed is None
+        assert rec.split_version == ""
+        assert rec.config == {}
+        assert rec.threshold_source == ""
+        assert np.isnan(rec.threshold_value)
+        assert rec.metrics == {}
+        assert rec.environment == {}
+        assert rec.notes == ""
+
+        # Validation catches all invalid required fields
+        errors = rec.validate()
+        assert any("run_id" in e for e in errors)
+        assert any("experiment_name" in e for e in errors)
+        assert any("timestamp" in e for e in errors)
+        assert any("split_version" in e for e in errors)
+        assert any("threshold_source" in e for e in errors)
+        assert any("threshold_value" in e for e in errors)
+
+    def test_from_dict_with_valid_record_and_null_optional_fields(self, sample_valid_record):
+        data = sample_valid_record.to_dict()
+        data["notes"] = None
+        data["git_commit"] = None
+        data["seed"] = None
+        data["config"] = None
+        data["metrics"] = None
+        data["environment"] = None
+        rec = ReproducibilityRecord.from_dict(data)
+        assert rec.notes == ""
+        assert rec.git_commit is None
+        assert rec.seed is None
+        assert rec.config == {}
+        assert rec.metrics == {}
+        assert rec.environment == {}
+        assert rec.is_valid is True
 
     def test_from_json_with_invalid_json_raises(self):
         with pytest.raises(ValueError, match="Invalid JSON string"):
@@ -354,6 +427,22 @@ class TestCreateReproducibilityRecord:
         assert rec.notes == "Method call test"
         assert rec.is_valid is True
 
+    def test_evaluation_report_to_reproducibility_record_explicit_none_commit(
+        self, sample_evaluation_report
+    ):
+        # Passing git_commit=None explicitly must preserve None and not auto-detect
+        rec = sample_evaluation_report.to_reproducibility_record(git_commit=None)
+        assert rec.git_commit is None
+        assert rec.is_valid is True
+
+        # Default auto-detects
+        rec_default = sample_evaluation_report.to_reproducibility_record()
+        assert rec_default.git_commit is not None
+
+        # Explicit commit string preserved
+        rec_explicit = sample_evaluation_report.to_reproducibility_record(git_commit="deadbeef123")
+        assert rec_explicit.git_commit == "deadbeef123"
+
 
 # =====================================================================
 # 5. CLI Integration Tests
@@ -425,6 +514,40 @@ class TestCLIIntegration:
         assert record.config["model_architecture"] == "resnet50_linear_probe"
         assert record.config["feature_layer"] == "layer4"
         assert record.is_valid is True
+
+    def test_cli_config_file_merged_with_cli_args(self, test_csv_predictions, tmp_path: Path):
+        cfg_path = tmp_path / "override_config.json"
+        cfg_path.write_text(
+            json.dumps({
+                "learning_rate": 0.001,
+                "batch_size": 32,
+                "val_split": "legacy_val",
+            }),
+            encoding="utf-8",
+        )
+        repro_path = tmp_path / "repro_merged.json"
+        exit_code = cli_module.main([
+            "--predictions", str(test_csv_predictions),
+            "--val-split", "val",
+            "--threshold-strategy", "f1",
+            "--seed", "123",
+            "--config-file", str(cfg_path),
+            "--save-reproducibility", str(repro_path),
+            "--quiet",
+        ])
+        assert exit_code == 0
+        assert repro_path.exists()
+
+        record = ReproducibilityRecord.load_json(repro_path)
+        assert record.is_valid is True
+        # Preserves keys from config file
+        assert record.config["learning_rate"] == 0.001
+        assert record.config["batch_size"] == 32
+        # CLI arguments override and merge
+        assert record.config["val_split"] == "val"
+        assert record.config["threshold_strategy"] == "f1"
+        assert record.config["seed"] == 123
+        assert record.config["predictions"] == str(test_csv_predictions)
 
     def test_cli_missing_config_file_returns_error(self, test_csv_predictions, tmp_path: Path):
         exit_code = cli_module.main([

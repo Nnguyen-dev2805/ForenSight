@@ -191,7 +191,10 @@ class ReproducibilityRecord:
 
         # 6. threshold_value: finite numerical float
         if (
-            not isinstance(self.threshold_value, (int, float))
+            not (
+                isinstance(self.threshold_value, (int, float))
+                and not isinstance(self.threshold_value, bool)
+            )
             or np.isnan(self.threshold_value)
             or np.isinf(self.threshold_value)
         ):
@@ -215,7 +218,10 @@ class ReproducibilityRecord:
 
         # 10. seed: int, str, or None
         if self.seed is not None:
-            if not isinstance(self.seed, (int, str)):
+            if not (
+                isinstance(self.seed, (int, str))
+                and not isinstance(self.seed, bool)
+            ):
                 errors.append(
                     f"seed must be an int, str, or None, got: {type(self.seed).__name__}"
                 )
@@ -292,18 +298,18 @@ class ReproducibilityRecord:
             thresh_val = float("nan")
 
         return cls(
-            run_id=str(data.get("run_id", "")),
-            experiment_name=str(data.get("experiment_name", "")),
-            timestamp=str(data.get("timestamp", "")),
+            run_id=str(data.get("run_id") or ""),
+            experiment_name=str(data.get("experiment_name") or ""),
+            timestamp=str(data.get("timestamp") or ""),
             git_commit=data.get("git_commit"),
             seed=data.get("seed"),
-            split_version=str(data.get("split_version", "")),
-            config=dict(data.get("config", {})),
-            threshold_source=str(data.get("threshold_source", "")),
+            split_version=str(data.get("split_version") or ""),
+            config=dict(data.get("config") or {}),
+            threshold_source=str(data.get("threshold_source") or ""),
             threshold_value=thresh_val,
-            metrics=dict(data.get("metrics", {})),
-            environment=dict(data.get("environment", {})),
-            notes=str(data.get("notes", "")),
+            metrics=dict(data.get("metrics") or {}),
+            environment=dict(data.get("environment") or {}),
+            notes=str(data.get("notes") or ""),
         )
 
     @classmethod
