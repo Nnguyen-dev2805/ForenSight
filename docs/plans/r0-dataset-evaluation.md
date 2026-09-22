@@ -12,19 +12,19 @@ R0 không trực tiếp trả lời RQ1–RQ3. Nó đảm bảo mọi kết lu�
 
 ## 2.1 Dataset strategy đã chốt cho baseline đầu tiên
 
-Không dùng nhiều dataset để train ngay từ đầu. Baseline đầu tiên dùng một protocol có kiểm soát:
+Chi tiết và bảng đặc tả đầy đủ xem tại [docs/dataset.md](../dataset.md).
 
-- **Primary training source:** GenImage — Stable Diffusion v1.4 subset.
-- **In-domain validation/test:** GenImage — Stable Diffusion v1.4.
-- **Near-OOD:** GenImage — Stable Diffusion v1.5.
-- **Cross-generator OOD:** GenImage — Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN.
-- **Modern external benchmark:** GenImage++ — test-only; ưu tiên FLUX/SD3 và các realistic/multistyle subsets khi phù hợp.
-- **Real-world external benchmark:** WildRF — chỉ evaluation, không tune trên test.
-- **Optional external benchmark:** Chameleon nếu lấy được quyền truy cập; không block tiến độ project.
+- **Active runtime datasets (R0 / R1):**
+  - **Primary training source:** GenImage — Stable Diffusion v1.4 (`sd14`).
+  - **In-domain validation/test:** GenImage — Stable Diffusion v1.4 (`sd14`).
+  - **Near-OOD:** GenImage — Stable Diffusion v1.5 (`sd15`).
+  - **Cross-generator OOD:** GenImage — Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN.
+  - **Modern external benchmark:** GenImage++ — test-only (FLUX.1, SD3, v.v.).
+- **Planned future benchmarks (không nằm trong core runtime R0/R1):**
+  - **Real-world external benchmark:** WildRF — test-only.
+  - **Optional external benchmark:** Chameleon / AIDE — test-only.
 
-GenImage được chọn vì có 8 generator và có protocol train trên SD v1.4 rồi test cross-generator đã được benchmark gốc sử dụng. Tuy nhiên GenImage có bias đã được công bố về JPEG compression và image size, nên project **không được** dùng score GenImage trước khi hoàn thành bias audit ở Task 0.3.
-
-Metadata/code từ Unbiased GenImage được dùng làm tài liệu và công cụ hỗ trợ audit bias; nó không mặc định thay GenImage thành một training dataset khác.
+GenImage được chọn vì có 8 generator và có protocol train trên SD v1.4 rồi test cross-generator đã được benchmark gốc sử dụng. Tuy nhiên GenImage có bias về JPEG compression và image size, nên project đo lường và định lượng bias ở Task 0.3 trước khi dùng kết luận research. Raw data được giữ immutable; mọi xử lý giảm bias nếu có sẽ là derived artifact riêng.
 
 ## 3. Tasks
 
@@ -86,7 +86,7 @@ external real-world:
   WildRF
 ```
 
-R0 phải kiểm tra exact/near duplicate và sample identity giữa các manifest trước khi gọi split là sealed.
+R0 phải kiểm tra exact duplicate (SHA256) và sample identity giữa các manifest trước khi gọi split là sealed (near-duplicate dHash là optional/deferred check). Chi tiết split policy xem tại [docs/dataset.md](../dataset.md).
 
 Để develop nhanh nhưng vẫn giữ diversity theo 1,000 ImageNet classes, tạo các scale manifest deterministic:
 
@@ -102,14 +102,13 @@ Smoke/pilot chỉ phục vụ development và preliminary experiment; kết lu�
 
 Kiểm tra tối thiểu:
 
-- exact duplicates;
-- near duplicates nếu khả thi;
+- exact duplicates (SHA256);
 - generator leakage;
 - label/source correlation;
 - resolution imbalance;
 - format/compression imbalance;
-- obvious watermark/text shortcut;
-- semantic category imbalance nếu metadata hỗ trợ.
+- semantic category imbalance nếu metadata hỗ trợ;
+- near duplicates (optional/deferred research check).
 
 Riêng GenImage, bắt buộc kiểm tra hai confound đã được literature chỉ ra:
 
@@ -120,7 +119,7 @@ Không tự động re-encode/resize toàn bộ dataset để "sửa bias" trư�
 
 Không chỉ report pass/fail. Cần lưu distribution đủ để hiểu mức độ bias.
 
-**Output:** leakage/bias report.
+**Output:** leakage/bias report (JSON + Markdown). Chi tiết xem [docs/dataset.md](../dataset.md).
 
 ### Task 0.4 — Metric and threshold policy
 
@@ -134,7 +133,7 @@ Threshold cho F1/Accuracy phải được chọn từ validation set và không 
 
 API nên nhận prediction/target đơn giản, không phụ thuộc model.
 
-**Output:** tested metric module + explicit threshold source/value in result.
+**Output:** tested metric module + explicit threshold source/value in result. Chi tiết xem [docs/evaluation.md](../evaluation.md).
 
 ### Task 0.5 — Evaluation runner
 
@@ -149,7 +148,7 @@ Output:
 - overall metrics;
 - metrics theo split/generator khi metadata có;
 - threshold metadata;
-- machine-readable result file.
+- machine-readable result file. Chi tiết xem [docs/evaluation.md](../evaluation.md).
 
 ### Task 0.6 — Repeated-run convention
 
@@ -157,13 +156,14 @@ Output:
 
 - trained baseline chính: target 3 seeds khi compute cho phép;
 - report mean ± std;
-- 1-seed run chỉ là preliminary result nếu có stochastic training.
+- 1-seed run chỉ là preliminary result nếu có stochastic training. Chi tiết xem [docs/evaluation.md](../evaluation.md).
 
 R0 chưa cần train model để thực thi rule này, nhưng result schema phải hỗ trợ `seed`.
 
 ### Task 0.7 — Smoke-test protocol
 
-Tạo một small subset đủ nhỏ để chạy nhanh trong development.
+Tạo một small synthetic subset (40 ảnh qua 5 classes) để chạy nhanh end-to-end trong development (< 0.05s).
+Pipeline chạy qua lệnh `python scripts/run_smoke_test.py`.
 
 Mục đích chỉ kiểm tra pipeline, không dùng làm evidence research chính.
 
@@ -176,7 +176,7 @@ Mỗi run lưu:
 - split version;
 - threshold source/value;
 - metrics;
-- timestamp.
+- timestamp. Chi tiết xem [docs/evaluation.md](../evaluation.md).
 
 ## 4. Success criteria
 
@@ -189,9 +189,9 @@ R0 hoàn tất khi:
 5. smoke-test đủ nhanh cho coding agent;
 6. result schema hỗ trợ seed và repeated-run aggregation;
 7. distribution về resolution/format/source/class/generator đã được kiểm tra;
-8. duplicate/near-duplicate risk đã được kiểm tra ở mức khả thi;
+8. exact duplicate (SHA256) được kiểm tra sạch; near-duplicate là optional/deferred check;
 9. không còn dataset ambiguity nghiêm trọng có thể làm sai research conclusion;
-10. implementation không mâu thuẫn với `docs/evaluation-protocol.md`.
+10. implementation không mâu thuẫn với [docs/evaluation.md](../evaluation.md).
 11. GenImage raw-data compression/resolution bias đã được định lượng trước khi quyết định preprocessing cho Stage 1.
 12. smoke/pilot/main manifests có deterministic sampling và giữ class balance ở mức khả thi.
 

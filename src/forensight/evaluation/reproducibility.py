@@ -1,7 +1,7 @@
 """Experiment reproducibility recording, environment capture, and provenance tracking.
 
 This module implements Task 0.8 of ForenSight Milestone R0:
-- ReproducibilityRecord: Standardized dataclass enforcing Section 12 of docs/evaluation-protocol.md:
+- ReproducibilityRecord: Standardized dataclass enforcing docs/evaluation.md:
   - run_id: unique run identifier
   - experiment_name: experiment or baseline family
   - timestamp: UTC ISO 8601 string
@@ -115,7 +115,7 @@ def get_environment_info(packages: Sequence[str] | None = None) -> dict[str, Any
 class ReproducibilityRecord:
     """Standardized record of experiment provenance, environment, and evaluation results.
 
-    Enforces Section 12 of docs/evaluation-protocol.md.
+    Enforces docs/evaluation.md.
     Every run must preserve:
     - config
     - seed

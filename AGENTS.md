@@ -20,10 +20,11 @@ Không tối ưu cho tốc độ thêm feature nếu phải đánh đổi các m
 Trước khi implement, đọc tài liệu liên quan theo thứ tự:
 
 1. `docs/research-problem.md` — research questions, hypotheses, terminology;
-2. `docs/architecture.md` — architecture và stage boundaries;
-3. `docs/evaluation-protocol.md` — split, metrics, evaluation rules;
-4. `docs/roadmap.md` — milestone hiện tại và gate;
-5. plan của milestone đang `ACTIVE` trong `docs/plans/`.
+2. `docs/roadmap.md` — milestone hiện tại và gate;
+3. `docs/architecture.md` — architecture và stage boundaries;
+4. `docs/dataset.md` — active datasets, splits, scale tiers, leakage audit;
+5. `docs/evaluation.md` — metrics, threshold policy, repeated runs;
+6. plan của milestone đang `ACTIVE` trong `docs/plans/`.
 
 Nếu task đụng đến một quyết định đã được ghi lại, đọc record tương ứng trong
 `docs/decisions/` trước khi thay đổi.
@@ -72,7 +73,7 @@ Không dùng workflow:
 - Không đổi preprocessing sau khi nhìn test result mà không version + rerun các
   baseline liên quan.
 - Chi tiết metric, repeated runs và evidence evaluation phải theo
-  `docs/evaluation-protocol.md`.
+  `docs/evaluation.md`.
 
 ## Research integrity
 
@@ -83,7 +84,7 @@ Không gọi method là `generalizable`, `faithful`, `evidence-preserving` hoặ
 `better` nếu chưa đạt evidence requirement tương ứng trong evaluation protocol.
 
 Terminology về candidate/validated/explanation-grounded evidence lấy từ
-`docs/research-problem.md` và `docs/evaluation-protocol.md`; không tự định nghĩa
+`docs/research-problem.md` và `docs/evaluation.md`; không tự định nghĩa
 lại trong code hoặc report.
 
 ## Data and artifact safety

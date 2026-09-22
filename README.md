@@ -58,13 +58,25 @@ Roadmap chi tiết: [docs/roadmap.md](docs/roadmap.md)
 
 ## Tài liệu chuẩn
 
-- [Research Problem](docs/research-problem.md)
-- [Architecture](docs/architecture.md)
-- [Evaluation Protocol](docs/evaluation-protocol.md)
-- [Roadmap](docs/roadmap.md)
-- [R0 Plan](docs/plans/r0-dataset-evaluation.md)
-- [Literature Notes](docs/literature-notes.md)
-- [Decision Log](docs/decisions/README.md)
+Theo thứ tự luồng đọc project:
+1. [Research Problem](docs/research-problem.md) — bài toán, research questions (RQ1–RQ3), hypotheses;
+2. [Roadmap](docs/roadmap.md) — các milestone nghiên cứu và gates;
+3. [Architecture](docs/architecture.md) — ranh giới module, encoders, projector, MLLM;
+4. [Dataset](docs/dataset.md) — active datasets (GenImage, GenImage++), generator roles, deterministic splits;
+5. [Evaluation](docs/evaluation.md) — thresholding validation-only, AUROC/F1 metrics, repeated runs;
+6. [R0 Plan](docs/plans/r0-dataset-evaluation.md) — implementation plan và gates của milestone R0;
+7. [Literature Notes](docs/literature-notes.md) — ghi chú tổng quan tài liệu nghiên cứu liên quan;
+8. [Decision Log](docs/decisions/README.md) — lịch sử các quyết định nghiên cứu / ADR.
+
+## Verification & Smoke Test
+
+```bash
+# 1. Chạy canonical unit test suite
+python3 -m pytest
+
+# 2. Chạy pipeline smoke test end-to-end 7 stages (chạy trong ~0.04s)
+python3 scripts/run_smoke_test.py
+```
 
 ## Quy tắc phát triển
 
