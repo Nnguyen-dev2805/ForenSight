@@ -243,3 +243,45 @@ def test_train_r2_cli_parsing():
     assert args.output_dir == "results/r2/semantic/seed42"
     assert not hasattr(args, "test_manifest")
 
+
+def test_evaluate_r2_cli_parsing():
+    import scripts.evaluate_r2 as eval_r2
+
+    args = eval_r2.parse_args([
+        "--config", "configs/r2/semantic.json",
+        "--checkpoint", "best.pt",
+        "--val-manifest", "val.jsonl",
+        "--eval-manifest", "test1.jsonl", "test2.jsonl",
+        "--predictions-out", "preds.jsonl",
+        "--report-json", "report.json",
+    ])
+    assert args.config == "configs/r2/semantic.json"
+    assert args.checkpoint == "best.pt"
+    assert args.val_manifest == "val.jsonl"
+    assert args.eval_manifest == ["test1.jsonl", "test2.jsonl"]
+    assert args.predictions_out == "preds.jsonl"
+    assert args.report_json == "report.json"
+
+
+def test_evaluate_r2_predictions_compatibility_with_r0_runner():
+    from forensight.evaluation.runner import PredictionRecord, PredictionSet, evaluate_predictions
+
+    records = [
+        # Val split (used to calibrate threshold)
+        PredictionRecord(sample_id="v1", label=0, score=0.2, split="val", generator="nature", dataset="genimage"),
+        PredictionRecord(sample_id="v2", label=1, score=0.8, split="val", generator="sd14", dataset="genimage"),
+        # Test splits (consume frozen threshold)
+        PredictionRecord(sample_id="t1", label=0, score=0.1, split="in_domain_test", generator="nature", dataset="genimage"),
+        PredictionRecord(sample_id="t2", label=1, score=0.9, split="in_domain_test", generator="sd14", dataset="genimage"),
+        PredictionRecord(sample_id="o1", label=1, score=0.85, split="cross_generator_ood", generator="midjourney", dataset="genimage"),
+    ]
+    pset = PredictionSet(records)
+    report = evaluate_predictions(pset, val_split_name="val", threshold_strategy="f1")
+
+    assert report.threshold_metadata["calibrated"] is True
+    assert report.threshold_metadata["threshold_source"].startswith("val_")
+    assert "in_domain_test" in report.by_split
+    assert "cross_generator_ood" in report.by_split
+    assert "midjourney" in report.by_generator
+
+
