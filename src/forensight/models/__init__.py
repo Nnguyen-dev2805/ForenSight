@@ -6,6 +6,7 @@ from forensight.models.forensic import (
     NPRTransform,
     build_resnet18_forensic,
 )
+from forensight.models.fusion import FusionDetector
 from forensight.models.semantic import (
     SemanticEncoder,
     SemanticOnlyDetector,
@@ -15,6 +16,7 @@ from forensight.models.semantic import (
 __all__ = [
     "ForensicEncoder",
     "ForensicOnlyDetector",
+    "FusionDetector",
     "NPRTransform",
     "SemanticEncoder",
     "SemanticOnlyDetector",
