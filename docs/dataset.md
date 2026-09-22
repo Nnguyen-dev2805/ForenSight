@@ -9,7 +9,8 @@ To ensure experimental clarity and prevent data snooping, training in Stage 1 is
 
 | Dataset | Version / Source | Role | Real Source | Fake Generators | Est. Images | Label Mapping | Local Directory |
 |---|---|---|---|---|---|---|---|
-| **GenImage** | 1.0 (NeurIPS 2023) [Hugging Face](https://huggingface.co/datasets/ENSTA-U2IS/GenImage) | Primary Stage 1 Benchmark | ImageNet (ILSVRC2012) | 8 generators (`sd14`, `sd15`, `midjourney`, `adm`, `glide`, `wukong`, `vqdm`, `biggan`) | ~2.6M (~1.33M pairs) | Real: 0<br>Fake: 1 | `data/raw/genimage` |
+| **Tiny-GenImage** | 1.0 (Subsampled Parquet) [Hugging Face](https://huggingface.co/datasets/TheKernel01/Tiny-GenImage) | Primary Stage 1 Benchmark | ImageNet (ILSVRC2012) | 8 generators (`sd14`, `sd15`, `midjourney`, `adm`, `glide`, `wukong`, `vqdm`, `biggan`) | 35k (28k train, 7k val) | Real: 0<br>Fake: 1 | `data/raw/tiny_genimage` |
+| **GenImage (Full)** | 1.0 (NeurIPS 2023) [Hugging Face](https://huggingface.co/datasets/ENSTA-U2IS/GenImage) | Reference Main Benchmark | ImageNet (ILSVRC2012) | 8 generators (`sd14`, `sd15`, `midjourney`, `adm`, `glide`, `wukong`, `vqdm`, `biggan`) | ~2.6M (~1.33M pairs) | Real: 0<br>Fake: 1 | `data/raw/genimage` |
 | **GenImage++** | 1.0 (2024) [Hugging Face](https://huggingface.co/datasets/Lunahera/genimagepp) | Modern External Benchmark (Test-Only) | ImageNet-1k, COCO, Web | Modern models (FLUX.1, SD3, PixArt, Kolors, HunyuanDiT, AuraFlow) | ~100k | Real: 0<br>Fake: 1 | `data/raw/genimagepp` |
 
 ### Planned Future Benchmarks (Not in R0/R1 active runtime inventory)
@@ -96,10 +97,22 @@ class ManifestRecord:
 
 ## 6. Hugging Face Download Workflow
 
-ForenSight uses Hugging Face as the primary transport layer. To download the Stage 1 training generator (SD1.4):
+ForenSight uses Hugging Face as the primary transport layer.
+
+### 6.1 Recommended: Tiny-GenImage (35k images, ~8.3GB)
+To download the primary Stage 1 dataset and automatically build sealed, leak-free manifests:
 
 ```bash
 pip install -e .
+python scripts/download_tiny_genimage.py --output-dir data/raw/tiny_genimage --manifest-dir data/manifests
+```
+
+This downloads the Parquet partitions from `TheKernel01/Tiny-GenImage`, extracts images into `data/raw/tiny_genimage/<generator>/`, and produces disjoint manifests (`tiny_genimage_train.jsonl`, `val.jsonl`, `test_sd14.jsonl`, `test_sd15.jsonl`, etc.) ensuring zero generator leakage into train/val.
+
+### 6.2 Reference: Full GenImage (Selective Multi-part ZIP)
+To selectively download individual generator archives from the full `ENSTA-U2IS/GenImage` benchmark:
+
+```bash
 python scripts/download_dataset.py --dataset genimage --generator sd14
 ```
 

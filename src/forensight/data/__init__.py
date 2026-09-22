@@ -48,8 +48,26 @@ from forensight.data.split import (
     subsample_manifest_by_class,
     validate_no_leakage,
 )
+from forensight.data.tiny_genimage import (
+    CROSS_GENERATOR_OOD_IDS,
+    DEFAULT_TINY_GENIMAGE_REPO_ID,
+    TINY_GENIMAGE_GENERATOR_MAP,
+    build_tiny_genimage_manifests,
+    detect_image_extension,
+    download_tiny_genimage_parquets,
+    extract_image_bytes,
+    extract_parquet_images,
+)
 
 __all__ = [
+    "CROSS_GENERATOR_OOD_IDS",
+    "DEFAULT_TINY_GENIMAGE_REPO_ID",
+    "TINY_GENIMAGE_GENERATOR_MAP",
+    "build_tiny_genimage_manifests",
+    "detect_image_extension",
+    "download_tiny_genimage_parquets",
+    "extract_image_bytes",
+    "extract_parquet_images",
     "AuditReport",
     "DatasetEntry",
     "DatasetInventory",

@@ -99,7 +99,7 @@ class TestDatasetInventory:
         sd14 = inv.get_generator_subset("genimage", "sd14")
         assert sd14 is not None
         assert sd14.role == "train_and_in_domain"
-        assert sd14.local_path == "data/raw/genimage/sdv4"
+        assert sd14.local_path == "data/raw/tiny_genimage/sd14"
 
         # Check SD1.5 role
         sd15 = inv.get_generator_subset("genimage", "sd15")

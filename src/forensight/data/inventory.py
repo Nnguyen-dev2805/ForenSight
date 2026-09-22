@@ -296,14 +296,14 @@ def build_default_inventory() -> DatasetInventory:
             role="train_and_in_domain",
             resolution="512x512 for fake; variable (ImageNet) for real",
             estimated_count={
-                "train_real": 160000,
-                "train_fake": 160000,
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 360000,
+                "train_real": 1750,
+                "train_fake": 1750,
+                "val_real": 437,
+                "val_fake": 437,
+                "total": 4374,
             },
-            local_path="data/raw/genimage/sdv4",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/sd14",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Primary training source and in-domain held-out validation/test split for Stage 1.",
         ),
         GeneratorSubset(
@@ -312,12 +312,11 @@ def build_default_inventory() -> DatasetInventory:
             role="near_ood",
             resolution="512x512 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/sdv5",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/sd15",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Near-OOD evaluation: same model family and architecture with updated weights.",
         ),
         GeneratorSubset(
@@ -326,12 +325,11 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="Variable / approx 512x512 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/midjourney",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/midjourney",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: closed-source commercial text-to-image generator.",
         ),
         GeneratorSubset(
@@ -340,12 +338,11 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="256x256 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/adm",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/adm",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: pixel-space diffusion model with classifier guidance.",
         ),
         GeneratorSubset(
@@ -354,12 +351,11 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="256x256 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/glide",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/glide",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: filtered pixel-space diffusion model.",
         ),
         GeneratorSubset(
@@ -368,12 +364,11 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="512x512 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/wukong",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/wukong",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: Chinese text-to-image diffusion model.",
         ),
         GeneratorSubset(
@@ -382,12 +377,11 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="256x256 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/vqdm",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/vqdm",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: vector-quantized discrete diffusion model.",
         ),
         GeneratorSubset(
@@ -396,21 +390,20 @@ def build_default_inventory() -> DatasetInventory:
             role="cross_generator_ood",
             resolution="256x256 for fake; variable (ImageNet) for real",
             estimated_count={
-                "val_real": 20000,
-                "val_fake": 20000,
-                "total": 40000,
+                "val_fake": 437,
+                "total": 2187,
             },
-            local_path="data/raw/genimage/biggan",
-            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
+            local_path="data/raw/tiny_genimage/biggan",
+            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
             notes="Cross-generator OOD: non-diffusion GAN architecture baseline.",
         ),
     ]
 
     genimage_entry = DatasetEntry(
         name="genimage",
-        display_name="GenImage",
-        version="1.0 (NeurIPS 2023)",
-        source="https://huggingface.co/datasets/ENSTA-U2IS/GenImage",
+        display_name="Tiny-GenImage",
+        version="1.0 (Subsampled Parquet)",
+        source="https://huggingface.co/datasets/TheKernel01/Tiny-GenImage",
         evaluation_role="Primary Stage 1 benchmark (train, in-domain val/test, near-OOD, cross-generator OOD)",
         real_source="ImageNet (ILSVRC2012)",
         fake_generators=[
@@ -424,11 +417,11 @@ def build_default_inventory() -> DatasetInventory:
             "BigGAN",
         ],
         image_count={
-            "train_real_sd14": 160000,
-            "train_fake_sd14": 160000,
-            "val_real_per_generator": 20000,
-            "val_fake_per_generator": 20000,
-            "total_benchmark_pairs": "~1,331,167",
+            "train_real": 14000,
+            "train_fake": 14000,
+            "val_real": 3500,
+            "val_fake": 3500,
+            "total": 35000,
         },
         resolution_distribution=(
             "Fake images have model-native resolutions: 512x512 for SD1.4, SD1.5, Wukong; "
@@ -443,20 +436,19 @@ def build_default_inventory() -> DatasetInventory:
         label_mapping={"real": 0, "fake": 1},
         license="GenImage: Apache-2.0 / Research Use; ImageNet: Non-commercial educational and research terms.",
         access_requirements=(
-            "Open research download from the Hugging Face mirror ENSTA-U2IS/GenImage. "
-            "ForenSight pins the resolved Hub commit SHA before downloading."
+            "Open research download from the Hugging Face repository TheKernel01/Tiny-GenImage. "
+            "Extracted to local directory data/raw/tiny_genimage."
         ),
-        local_path="data/raw/genimage",
+        local_path="data/raw/tiny_genimage",
         generator_subsets=genimage_subsets,
         download_instructions=[
             "Install project dependencies: pip install -e .",
-            "Download SD1.4 only: python scripts/download_dataset.py --dataset genimage --generator sd14",
-            "Archives are stored under data/raw/genimage/_downloads/sd14 with source.json recording the pinned Hub commit SHA.",
-            "Extract the multi-part SD1.4 archive into data/raw/genimage/sdv4 before building manifests and running the R0 audit.",
+            "Download and extract Tiny-GenImage: python scripts/download_tiny_genimage.py --output-dir data/raw/tiny_genimage --manifest-dir data/manifests",
+            "Extracts Parquet images and automatically generates disjoint train, val, and OOD manifests.",
         ],
         notes=(
             "Primary benchmark for Stage 1. Training is strictly restricted to SD1.4 subset to test cross-generator generalization. "
-            "SD1.4 contains official train/nature, train/ai, val/nature, val/ai splits."
+            "Zero generator leakage is enforced across train, val, and OOD splits."
         ),
     )
 
