@@ -10,18 +10,80 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from forensight.data.r2_dataset import build_forensic_input_transform
 from forensight.evaluation.runner import PredictionRecord, PredictionSet
+from forensight.models.forensic import ForensicOnlyDetector, build_resnet18_forensic
+from forensight.models.fusion import FusionDetector
+from forensight.models.semantic import SemanticOnlyDetector, load_open_clip_semantic
 
 
 VALID_VARIANTS = {"semantic", "forensic", "fusion"}
 REQUIRED_CONFIG_SECTIONS = {"model", "training", "evaluation"}
+
+
+def select_device() -> torch.device:
+    """Select MPS on Apple Silicon, CUDA if available, else CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def build_r2_model(
+    config: dict[str, Any],
+) -> tuple[nn.Module, Callable[[Any], torch.Tensor] | None, Callable[[Any], torch.Tensor] | None]:
+    """Assemble an R2 model and branch transforms according to experiment config."""
+    variant = config["variant"]
+    model_cfg = config["model"]
+    clip_transform = None
+    forensic_transform = None
+
+    if variant in {"semantic", "fusion"}:
+        semantic_encoder, clip_transform = load_open_clip_semantic(
+            model_name=model_cfg["clip_model"],
+            pretrained=model_cfg["clip_pretrained"],
+            projection_dim=model_cfg["projection_dim"],
+        )
+
+    if variant in {"forensic", "fusion"}:
+        forensic_encoder = build_resnet18_forensic(
+            projection_dim=model_cfg["projection_dim"],
+            npr_scale_factor=model_cfg["npr_scale_factor"],
+            npr_mode=model_cfg["npr_mode"],
+        )
+        forensic_transform = build_forensic_input_transform(model_cfg["image_size"])
+
+    if variant == "semantic":
+        model = SemanticOnlyDetector(
+            semantic_encoder,
+            hidden_dim=model_cfg["hidden_dim"],
+            dropout=model_cfg["dropout"],
+        )
+    elif variant == "forensic":
+        model = ForensicOnlyDetector(
+            forensic_encoder,
+            hidden_dim=model_cfg["hidden_dim"],
+            dropout=model_cfg["dropout"],
+        )
+    elif variant == "fusion":
+        model = FusionDetector(
+            semantic_encoder,
+            forensic_encoder,
+            hidden_dim=model_cfg["hidden_dim"],
+            dropout=model_cfg["dropout"],
+        )
+    else:
+        raise ValueError(f"Unsupported R2 variant: {variant}")
+
+    return model, clip_transform, forensic_transform
 
 
 def set_seed(seed: int) -> None:

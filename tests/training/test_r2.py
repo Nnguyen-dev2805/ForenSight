@@ -157,3 +157,89 @@ def test_load_r2_config_validation(tmp_path: Path):
     missing_sections.write_text(json.dumps({"variant": "semantic"}))
     with pytest.raises(ValueError, match="Missing required configuration section"):
         load_r2_config(missing_sections)
+
+
+def test_build_r2_model_with_dummy_backbones(monkeypatch):
+    from forensight.models.forensic import ForensicEncoder, NPRTransform
+    from forensight.models.semantic import SemanticEncoder
+    from forensight.training.r2 import build_r2_model
+
+    class MockClip(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(8, 8)
+        def encode_image(self, x):
+            return self.linear(x)
+
+    class MockForensicBackbone(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc = nn.Identity()
+        def forward(self, x):
+            return torch.zeros(x.shape[0], 512)
+
+    def mock_load_clip(**kwargs):
+        encoder = SemanticEncoder(MockClip(), feature_dim=8, projection_dim=kwargs.get("projection_dim", 256))
+        return encoder, lambda img: torch.zeros(3, 8, 8)
+
+    def mock_build_forensic(**kwargs):
+        return ForensicEncoder(MockForensicBackbone(), feature_dim=512, projection_dim=kwargs.get("projection_dim", 256), npr=NPRTransform(scale_factor=0.5))
+
+    monkeypatch.setattr("forensight.training.r2.load_open_clip_semantic", mock_load_clip)
+    monkeypatch.setattr("forensight.training.r2.build_resnet18_forensic", mock_build_forensic)
+
+    base_model_cfg = {
+        "clip_model": "ViT-L-14",
+        "clip_pretrained": "openai",
+        "projection_dim": 256,
+        "hidden_dim": 128,
+        "dropout": 0.2,
+        "image_size": 224,
+        "npr_scale_factor": 0.5,
+        "npr_mode": "bilinear",
+    }
+
+    # Semantic variant
+    sem_cfg = {"variant": "semantic", "model": base_model_cfg}
+    sem_model, sem_clip_t, sem_for_t = build_r2_model(sem_cfg)
+    assert sem_model is not None
+    assert sem_clip_t is not None
+    assert sem_for_t is None
+
+    # Forensic variant
+    for_cfg = {"variant": "forensic", "model": base_model_cfg}
+    for_model, for_clip_t, for_for_t = build_r2_model(for_cfg)
+    assert for_model is not None
+    assert for_clip_t is None
+    assert for_for_t is not None
+
+    # Fusion variant
+    fus_cfg = {"variant": "fusion", "model": base_model_cfg}
+    fus_model, fus_clip_t, fus_for_t = build_r2_model(fus_cfg)
+    assert fus_model is not None
+    assert fus_clip_t is not None
+    assert fus_for_t is not None
+
+
+def test_select_device():
+    from forensight.training.r2 import select_device
+
+    device = select_device()
+    assert isinstance(device, torch.device)
+
+
+def test_train_r2_cli_parsing():
+    import scripts.train_r2 as train_r2
+
+    args = train_r2.parse_args([
+        "--config", "configs/r2/semantic.json",
+        "--train-manifest", "train.jsonl",
+        "--val-manifest", "val.jsonl",
+        "--output-dir", "results/r2/semantic/seed42",
+    ])
+    assert args.config == "configs/r2/semantic.json"
+    assert args.train_manifest == "train.jsonl"
+    assert args.val_manifest == "val.jsonl"
+    assert args.output_dir == "results/r2/semantic/seed42"
+    assert not hasattr(args, "test_manifest")
+
