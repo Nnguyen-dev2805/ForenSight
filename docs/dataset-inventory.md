@@ -9,10 +9,17 @@ In accordance with the Stage 1 dataset strategy ([docs/decisions/2026-09-18-stag
 
 ### Summary Table
 
+#### Active Stage 1 Runtime Datasets (R0 / R1)
+
 | Dataset | Version / Source | Evaluation Role | Real Source | Fake Generators | Est. Count | Label Mapping | Local Path | Access |
 |---|---|---|---|---|---|---|---|---|
-| **GenImage** | 1.0 (NeurIPS 2023) [GitHub](https://github.com/GenImage-Dataset/GenImage) | Primary Stage 1 Benchmark | ImageNet (ILSVRC2012) | 8 generators (SD1.4, SD1.5, Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN) | ~1.33M pairs (~2.6M images) | Real: 0<br>Fake: 1 | `data/raw/genimage` | Open Research |
+| **GenImage** | 1.0 (NeurIPS 2023) [Hugging Face mirror](https://huggingface.co/datasets/ENSTA-U2IS/GenImage) | Primary Stage 1 Benchmark | ImageNet (ILSVRC2012) | 8 generators (SD1.4, SD1.5, Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN) | ~1.33M pairs (~2.6M images) | Real: 0<br>Fake: 1 | `data/raw/genimage` | Open Research |
 | **GenImage++** | 1.0 (2024) [Hugging Face](https://huggingface.co/datasets/Lunahera/genimagepp) | Modern External Benchmark (Test-Only) | ImageNet-1k, COCO, Web | Modern models (FLUX.1, SD3, PixArt, Kolors, HunyuanDiT, AuraFlow) | ~100k images | Real: 0<br>Fake: 1 | `data/raw/genimagepp` | Open Research |
+
+#### Planned Future Benchmarks (Not in R0/R1 runtime inventory)
+
+| Dataset | Version / Source | Evaluation Role | Real Source | Fake Generators | Est. Count | Label Mapping | Local Path | Access |
+|---|---|---|---|---|---|---|---|---|
 | **WildRF** | 1.0 (2024) [GitHub](https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld) | Real-World External Benchmark (Test-Only) | Social media / open web platforms | In-the-wild generators (Midjourney, DALL-E, SDXL, online tools) | ~12k images | Real: 0<br>Fake: 1 | `data/raw/wildrf` | Open Research |
 | **Chameleon** | 1.0 (2024) [GitHub](https://github.com/shilinyan99/AIDE) | Optional External Benchmark (Test-Only) | Professional photography (Unsplash, RAISE) | Human-hard photorealistic synthetic images | ~6k images | Real: 0<br>Fake: 1 | `data/raw/chameleon` | Gated (Application) |
 
@@ -23,7 +30,8 @@ In accordance with the Stage 1 dataset strategy ([docs/decisions/2026-09-18-stag
 ### 2.1 GenImage (Primary Stage 1 Benchmark)
 
 * **Source Reference:** *GenImage: A Million-Scale Dataset for Detecting AI-Generated Image* (Zhu et al., NeurIPS 2023 Datasets & Benchmarks Track).
-* **Repository:** [https://github.com/GenImage-Dataset/GenImage](https://github.com/GenImage-Dataset/GenImage)
+* **Canonical Project Reference:** [GenImage official repository](https://github.com/GenImage-Dataset/GenImage)
+* **ForenSight Download Source:** [Hugging Face mirror `ENSTA-U2IS/GenImage`](https://huggingface.co/datasets/ENSTA-U2IS/GenImage)
 * **Real Source:** ImageNet (ILSVRC2012) 1,000 object categories.
 * **Label Convention:** `real`: 0, `fake`: 1.
 * **License:** GenImage Apache-2.0 / Research Use; ImageNet terms of access for non-commercial educational/research use.
@@ -63,6 +71,17 @@ Within `data/raw/genimage/<generator>/`:
     ├── nature/
     └── ai/
 ```
+
+#### Hugging Face Download Workflow
+
+ForenSight uses Hugging Face as the transport layer instead of cloning/downloading through GitHub. Start with SD1.4 only:
+
+```bash
+pip install -e .
+python scripts/download_dataset.py --dataset genimage --generator sd14
+```
+
+The downloader resolves `main` (or `--revision`) to an immutable Hub commit SHA, downloads only `stable_diffusion_v_1_4/**`, and records provenance in `data/raw/genimage/_downloads/sd14/source.json`. The mirror stores SD1.4 as a multi-part ZIP archive, so extraction is intentionally separate; extract it into `data/raw/genimage/sdv4/` before generating the real R0 manifests and audit report.
 
 ---
 

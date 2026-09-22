@@ -87,7 +87,7 @@ flowchart LR
 
 ### Stage 4: Dataset Audit Execution
 - Runs `audit_manifest_leakage()` across splits, confirming zero leakage.
-- Runs `audit_manifest_images()` on the training partition to inspect physical image attributes, quantization tables, SHA256 hashes, and perceptual dHashes.
+- Runs `audit_manifest_images()` on the training partition to inspect physical image attributes, quantization tables, and SHA256 hashes for exact duplicate detection.
 - Saves audit JSON and Markdown reports to `<output_dir>/audit/`.
 
 ### Stage 5: Synthetic Prediction Simulation

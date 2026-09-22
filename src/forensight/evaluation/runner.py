@@ -126,10 +126,11 @@ class PredictionRecord:
         if not isinstance(data, dict):
             raise TypeError(f"Expected dict, got {type(data)}")
 
-        def _find_val(d: dict[str, Any], keys: Sequence[str]) -> Any:
+        def _find_val(d: dict[str, Any], keys: tuple[str, ...]) -> Any:
             for k in keys:
-                if k in d and d[k] is not None and not (isinstance(d[k], float) and pd.isna(d[k])):
-                    return d[k]
+                v = d.get(k)
+                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    return v
             return None
 
         def _clean_str(val: Any) -> str | None:
@@ -138,9 +139,9 @@ class PredictionRecord:
             s = str(val).strip()
             return s if s and s.lower() != "nan" else None
 
-        sample_id = _find_val(data, ["sample_id", "id", "image_id", "path", "image_path"])
-        label = _find_val(data, ["label", "target", "y_true", "ground_truth"])
-        score = _find_val(data, ["score", "prob", "probability", "pred", "prediction", "y_score", "y_pred"])
+        sample_id = _find_val(data, ("sample_id", "id", "image_path"))
+        label = _find_val(data, ("label", "target", "y_true"))
+        score = _find_val(data, ("score", "prob", "prediction"))
 
         if sample_id is None:
             raise ValueError(f"Missing required sample_id in prediction record: {data}")
@@ -169,26 +170,10 @@ class PredictionRecord:
 
         # Capture leftover keys into metadata
         standard_keys = {
-            "sample_id",
-            "id",
-            "image_id",
-            "path",
-            "image_path",
-            "label",
-            "target",
-            "y_true",
-            "ground_truth",
-            "score",
-            "prob",
-            "probability",
-            "pred",
-            "prediction",
-            "y_score",
-            "y_pred",
-            "split",
-            "generator",
-            "dataset",
-            "metadata",
+            "sample_id", "id", "image_path",
+            "label", "target", "y_true",
+            "score", "prob", "prediction",
+            "split", "generator", "dataset", "metadata",
         }
         for k, v in data.items():
             if k not in standard_keys and k not in meta:

@@ -72,14 +72,12 @@ class TestDatasetInventory:
 
     def test_default_inventory_datasets(self):
         inv = build_default_inventory()
-        assert len(inv) == 4
+        assert len(inv) == 2
         assert "genimage" in inv
         assert "genimage_plus_plus" in inv
-        assert "wildrf" in inv
-        assert "chameleon" in inv
 
         names = inv.list_dataset_names()
-        assert set(names) == {"genimage", "genimage_plus_plus", "wildrf", "chameleon"}
+        assert set(names) == {"genimage", "genimage_plus_plus"}
 
     def test_genimage_generators(self):
         inv = build_default_inventory()
@@ -179,14 +177,12 @@ class TestDatasetInventory:
 
     def test_committed_inventory_json_file(self):
         """Verifies the actual data/dataset_inventory.json file in the repo."""
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parent.parent.parent
         json_file = repo_root / "data" / "dataset_inventory.json"
         assert json_file.exists(), f"File {json_file} does not exist"
 
         loaded = load_inventory(json_file)
-        assert len(loaded) == 4
+        assert len(loaded) == 2
         assert loaded.is_valid()
         assert "genimage" in loaded
         assert "genimage_plus_plus" in loaded
-        assert "wildrf" in loaded
-        assert "chameleon" in loaded

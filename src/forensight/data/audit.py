@@ -83,115 +83,6 @@ def compute_file_sha256(path: Path | str, chunk_size: int = 65536) -> str:
     return hasher.hexdigest()
 
 
-def compute_dhash(img: Image.Image, hash_size: int = 8) -> str:
-    """Compute 64-bit difference hash (dHash) as a 16-character hex string.
-
-    Resizes image to (hash_size + 1, hash_size) in grayscale, compares adjacent
-    horizontal pixels, and returns a 16-character hexadecimal representation.
-    """
-    resized = img.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.BILINEAR)
-    pixels = list(resized.tobytes())
-    diff = []
-    for row in range(hash_size):
-        row_offset = row * (hash_size + 1)
-        for col in range(hash_size):
-            p_left = pixels[row_offset + col]
-            p_right = pixels[row_offset + col + 1]
-            diff.append("1" if p_left > p_right else "0")
-    val = int("".join(diff), 2)
-    return f"{val:016x}"
-
-
-def hamming_distance(h1: str, h2: str) -> int:
-    """Compute Hamming distance (bit differences) between two hex hash strings."""
-    return (int(h1, 16) ^ int(h2, 16)).bit_count()
-
-
-def detect_watermark_shortcuts(img: Image.Image) -> list[str]:
-    """Lightweight heuristic check for watermarks, copyright text, and border shortcuts.
-
-    Inspects:
-    1. EXIF metadata and image info dictionary for known watermark / generator strings.
-    2. Image borders for uniform solid letterbox bands when image interior contains texture.
-
-    Returns:
-        List of detected indicator tags (empty if clean).
-    """
-    indicators: list[str] = []
-
-    # 1. Check metadata and EXIF
-    meta_strings: list[str] = []
-    if hasattr(img, "info") and isinstance(img.info, dict):
-        for k, v in img.info.items():
-            if isinstance(v, str):
-                meta_strings.append(f"{k}:{v}")
-            elif isinstance(v, bytes):
-                try:
-                    meta_strings.append(f"{k}:{v.decode('latin-1', errors='ignore')}")
-                except Exception:
-                    pass
-
-    if hasattr(img, "getexif"):
-        try:
-            exif = img.getexif()
-            if exif:
-                for tag_id, val in exif.items():
-                    if isinstance(val, (str, bytes)):
-                        s_val = (
-                            val.decode("latin-1", errors="ignore")
-                            if isinstance(val, bytes)
-                            else str(val)
-                        )
-                        meta_strings.append(f"exif_{tag_id}:{s_val}")
-        except Exception:
-            pass
-
-    keywords = [
-        "watermark",
-        "copyright",
-        "dall-e",
-        "midjourney",
-        "stable diffusion",
-        "civitai",
-        "novelai",
-        "shutterstock",
-        "getty",
-        "photoshop",
-        "stock",
-    ]
-    meta_blob = " ".join(meta_strings).lower()
-    for kw in keywords:
-        if kw in meta_blob:
-            indicators.append(f"metadata:{kw}")
-
-    # 2. Check for solid letterbox border bands (top or bottom)
-    w, h = img.size
-    if w >= 32 and h >= 32:
-        try:
-            gray = img.convert("L")
-            # Interior region (20% to 80%)
-            center_box = (int(w * 0.2), int(h * 0.2), int(w * 0.8), int(h * 0.8))
-            center_crop = gray.crop(center_box)
-            c_ext = center_crop.getextrema()
-            # If interior has meaningful contrast/texture
-            if c_ext and (c_ext[1] - c_ext[0]) > 20:
-                band_h = max(2, int(h * 0.05))
-                top_ext = gray.crop((0, 0, w, band_h)).getextrema()
-                bottom_ext = gray.crop((0, h - band_h, w, h)).getextrema()
-                has_top = top_ext and (top_ext[1] - top_ext[0]) <= 1
-                has_bottom = bottom_ext and (bottom_ext[1] - bottom_ext[0]) <= 1
-                if has_top and has_bottom:
-                    indicators.append("letterbox_border")
-                elif has_top:
-                    indicators.append("letterbox_top_border")
-                elif has_bottom:
-                    indicators.append("letterbox_bottom_border")
-        except Exception:
-            pass
-
-    return indicators
-
-
 @dataclass
 class ImageAttributes:
     """Extracted physical and forensic attributes of an image file."""
@@ -210,8 +101,6 @@ class ImageAttributes:
     file_size_bytes: int
     jpeg_quality: int | None
     sha256: str
-    phash: str | None = None
-    watermark_indicators: list[str] = field(default_factory=list)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -221,14 +110,12 @@ class ImageAttributes:
 def extract_image_attributes(
     record: ManifestRecord | dict[str, Any],
     base_dir: Path | str | None = None,
-    compute_phash: bool = True,
 ) -> ImageAttributes:
     """Extract physical and forensic attributes from a manifest image record.
 
     Args:
         record: ManifestRecord instance or dictionary with manifest fields.
         base_dir: Optional base directory prefix if image_path is relative.
-        compute_phash: Whether to compute perceptual dHash for near-duplicate checks.
 
     Returns:
         ImageAttributes containing dimension, format, quality, and hash properties.
@@ -266,7 +153,6 @@ def extract_image_attributes(
             file_size_bytes=0,
             jpeg_quality=None,
             sha256="",
-            phash=None,
             error=f"File not found: {p}",
         )
 
@@ -279,8 +165,6 @@ def extract_image_attributes(
             aspect_ratio = round(width / height, 4) if height > 0 else 0.0
             fmt = (img.format or "UNKNOWN").upper()
             jpeg_quality = estimate_jpeg_quality(img)
-            phash_val = compute_dhash(img) if compute_phash else None
-            watermark_indicators = detect_watermark_shortcuts(img)
 
         return ImageAttributes(
             sample_id=sample_id,
@@ -297,8 +181,6 @@ def extract_image_attributes(
             file_size_bytes=file_size_bytes,
             jpeg_quality=jpeg_quality,
             sha256=sha256_hash,
-            phash=phash_val,
-            watermark_indicators=watermark_indicators,
             error=None,
         )
     except Exception as e:
@@ -317,7 +199,6 @@ def extract_image_attributes(
             file_size_bytes=0,
             jpeg_quality=None,
             sha256="",
-            phash=None,
             error=f"Error reading image: {e}",
         )
 
@@ -524,7 +405,6 @@ class AuditReport:
     num_real: int
     num_fake: int
     duplicate_check: list[dict[str, Any]]
-    near_duplicate_check: list[dict[str, Any]]
     generator_leakage: list[dict[str, Any]]
     sample_leakage: list[dict[str, Any]]
     resolution_stats: dict[str, Any]
@@ -532,7 +412,6 @@ class AuditReport:
     compression_stats: dict[str, Any]
     class_balance: dict[str, Any]
     source_balance: dict[str, Any] = field(default_factory=dict)
-    watermark_stats: dict[str, Any] = field(default_factory=dict)
     summary_findings: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -703,9 +582,6 @@ def audit_manifest_images(
     base_dir: Path | str | None = None,
     manifest_name: str = "dataset_audit",
     max_workers: int = 4,
-    compute_phash: bool = True,
-    near_duplicate_threshold: int = 2,
-    max_near_duplicate_candidates: int = 2500,
     leakage_check_results: dict[str, Any] | None = None,
 ) -> AuditReport:
     """Run comprehensive image inspection and bias quantification on a manifest.
@@ -715,9 +591,6 @@ def audit_manifest_images(
         base_dir: Optional base directory prefix for relative image paths.
         manifest_name: Name identifier for the audit report.
         max_workers: Number of concurrent threads for image attribute extraction.
-        compute_phash: Whether to compute perceptual dHash for near-duplicate analysis.
-        near_duplicate_threshold: Hamming distance threshold for flagging near duplicates.
-        max_near_duplicate_candidates: Maximum candidate images for pairwise dHash comparison.
         leakage_check_results: Optional leakage check results from audit_manifest_leakage.
 
     Returns:
@@ -738,7 +611,6 @@ def audit_manifest_images(
                         extract_image_attributes,
                         record=rec,
                         base_dir=base_dir,
-                        compute_phash=compute_phash,
                     )
                     for rec in records
                 ]
@@ -750,7 +622,6 @@ def audit_manifest_images(
                     extract_image_attributes(
                         record=rec,
                         base_dir=base_dir,
-                        compute_phash=compute_phash,
                     )
                 )
 
@@ -784,35 +655,7 @@ def audit_manifest_images(
                 "cross_split": len(set(splits)) > 1,
             })
 
-    # 3. Near-duplicate check (dHash Hamming distance)
-    near_duplicate_check: list[dict[str, Any]] = []
-    near_dup_skipped = False
-    if compute_phash:
-        phash_candidates = [a for a in valid_attrs if a.phash is not None]
-        if len(phash_candidates) <= max_near_duplicate_candidates:
-            for i in range(len(phash_candidates)):
-                a1 = phash_candidates[i]
-                h1 = int(a1.phash, 16)
-                for j in range(i + 1, len(phash_candidates)):
-                    a2 = phash_candidates[j]
-                    h2 = int(a2.phash, 16)
-                    dist = (h1 ^ h2).bit_count()
-                    if dist <= near_duplicate_threshold:
-                        if a1.sha256 and a1.sha256 == a2.sha256:
-                            continue
-                        near_duplicate_check.append({
-                            "sample_ids": [a1.sample_id, a2.sample_id],
-                            "image_paths": [a1.image_path, a2.image_path],
-                            "distance": dist,
-                            "labels": [a1.label, a2.label],
-                            "splits": [a1.split, a2.split],
-                            "cross_label": a1.label != a2.label,
-                            "cross_split": a1.split != a2.split,
-                        })
-        else:
-            near_dup_skipped = True
-
-    # 4. Resolution statistics (literature confound: GenImage resolution disparity)
+    # 3. Resolution statistics (literature confound: GenImage resolution disparity)
     resolution_stats = {
         "real": {
             "width": calculate_distribution_stats([a.width for a in real_attrs]),
@@ -869,22 +712,7 @@ def audit_manifest_images(
     # 8. Source balance & correlation
     source_balance = calculate_source_balance(records)
 
-    # 9. Watermark statistics & shortcuts
-    real_wm = [a for a in real_attrs if a.watermark_indicators]
-    fake_wm = [a for a in fake_attrs if a.watermark_indicators]
-    valid_wm = [a for a in valid_attrs if a.watermark_indicators]
-
-    watermark_stats = {
-        "total_flagged": len(valid_wm),
-        "real_flagged": len(real_wm),
-        "fake_flagged": len(fake_wm),
-        "sample_indicators": [
-            {"sample_id": a.sample_id, "label": a.label, "indicators": a.watermark_indicators}
-            for a in valid_wm[:10]
-        ],
-    }
-
-    # 10. Leakage summaries
+    # 9. Leakage summaries
     generator_leakage: list[dict[str, Any]] = []
     sample_leakage: list[dict[str, Any]] = []
     if leakage_check_results:
@@ -939,56 +767,7 @@ def audit_manifest_images(
                 "details": {"duplicate_count": len(duplicate_check)},
             })
 
-    # Finding 2: Near Duplicates
-    if not compute_phash:
-        summary_findings.append({
-            "check": "near_duplicates",
-            "status": "SKIPPED",
-            "severity": "INFO",
-            "message": "Near-duplicate check disabled (compute_phash=False).",
-        })
-    elif near_dup_skipped:
-        summary_findings.append({
-            "check": "near_duplicates",
-            "status": "SKIPPED",
-            "severity": "INFO",
-            "message": (
-                f"Near-duplicate check skipped: sample size ({len(phash_candidates)}) "
-                f"exceeds pairwise limit ({max_near_duplicate_candidates}). "
-                "Use subsampling or indexed search."
-            ),
-            "details": {
-                "candidate_count": len(phash_candidates),
-                "limit": max_near_duplicate_candidates,
-            },
-        })
-    elif not near_duplicate_check:
-        summary_findings.append({
-            "check": "near_duplicates",
-            "status": "PASS",
-            "severity": "INFO",
-            "message": f"Zero near-duplicate image pairs detected (Hamming distance <= {near_duplicate_threshold}).",
-        })
-    else:
-        cross_split_near = [d for d in near_duplicate_check if d.get("cross_split")]
-        if cross_split_near:
-            summary_findings.append({
-                "check": "near_duplicates",
-                "status": "WARNING",
-                "severity": "WARNING",
-                "message": f"Detected {len(cross_split_near)} near-duplicate pair(s) across splits.",
-                "details": {"near_duplicate_count": len(cross_split_near)},
-            })
-        else:
-            summary_findings.append({
-                "check": "near_duplicates",
-                "status": "INFO",
-                "severity": "INFO",
-                "message": f"Detected {len(near_duplicate_check)} near-duplicate pair(s) within partitions.",
-                "details": {"near_duplicate_count": len(near_duplicate_check)},
-            })
-
-    # Finding 3: Generator Leakage
+    # Finding 2: Generator Leakage
     if not generator_leakage:
         summary_findings.append({
             "check": "generator_leakage",
@@ -1159,39 +938,7 @@ def audit_manifest_images(
             "details": source_balance,
         })
 
-    # Finding 10: Watermark Shortcuts
-    if not valid_wm:
-        summary_findings.append({
-            "check": "watermark_shortcuts",
-            "status": "PASS",
-            "severity": "INFO",
-            "message": "No obvious watermark, metadata copyright, or letterbox shortcuts detected.",
-        })
-    else:
-        prop_real_wm = len(real_wm) / len(real_attrs) if real_attrs else 0.0
-        prop_fake_wm = len(fake_wm) / len(fake_attrs) if fake_attrs else 0.0
-        wm_disparity = abs(prop_real_wm - prop_fake_wm)
-        if wm_disparity > 0.05 or len(real_wm) != len(fake_wm):
-            summary_findings.append({
-                "check": "watermark_shortcuts",
-                "status": "WARNING",
-                "severity": "WARNING",
-                "message": (
-                    f"Watermark shortcut alert: Detected {len(valid_wm)} image(s) with watermark indicators "
-                    f"(real: {len(real_wm)}, fake: {len(fake_wm)}). Detectors risk exploiting watermark shortcuts."
-                ),
-                "details": watermark_stats,
-            })
-        else:
-            summary_findings.append({
-                "check": "watermark_shortcuts",
-                "status": "INFO",
-                "severity": "INFO",
-                "message": f"Detected {len(valid_wm)} image(s) with watermark indicators, evenly balanced.",
-                "details": watermark_stats,
-            })
-
-    # Finding 11: File read errors
+    # Finding 10: File read errors
     read_errors = [a for a in attrs if a.error is not None]
     if read_errors:
         summary_findings.append({
@@ -1215,7 +962,6 @@ def audit_manifest_images(
         num_real=num_real,
         num_fake=num_fake,
         duplicate_check=duplicate_check,
-        near_duplicate_check=near_duplicate_check,
         generator_leakage=generator_leakage,
         sample_leakage=sample_leakage,
         resolution_stats=resolution_stats,
@@ -1223,13 +969,9 @@ def audit_manifest_images(
         compression_stats=compression_stats,
         class_balance=class_balance,
         source_balance=source_balance,
-        watermark_stats=watermark_stats,
         summary_findings=summary_findings,
         metadata={
             "num_read_errors": len(read_errors),
-            "near_duplicate_threshold": near_duplicate_threshold,
-            "near_duplicate_skipped": near_dup_skipped,
-            "max_near_duplicate_candidates": max_near_duplicate_candidates,
         },
     )
 
@@ -1277,12 +1019,6 @@ def generate_audit_markdown(report: AuditReport) -> str:
     lines.append("## 2. Integrity, Duplicates & Leakage")
     lines.append("")
     lines.append(f"- **Exact Duplicates (SHA256 Collisions):** {len(report.duplicate_check)} duplicate group(s)")
-    near_status = (
-        "SKIPPED (sample size exceeds pairwise limit)"
-        if report.metadata.get("near_duplicate_skipped")
-        else f"{len(report.near_duplicate_check)} near-duplicate pair(s)"
-    )
-    lines.append(f"- **Near Duplicates (dHash):** {near_status}")
     lines.append(f"- **Cross-Split Sample Collisions:** {len(report.sample_leakage)} collision(s)")
     lines.append(f"- **Generator Overlaps (Train vs Eval):** {len(report.generator_leakage)} leak(s)")
     lines.append("")
@@ -1427,20 +1163,6 @@ def generate_audit_markdown(report: AuditReport) -> str:
         )
     lines.append("")
 
-    # Section 8: Watermark & Shortcut Analysis
-    lines.append("## 8. Watermark & Artifact Shortcut Analysis")
-    lines.append("")
-    wm = report.watermark_stats
-    lines.append(f"- **Images with Watermark/Border Indicators:** {wm.get('total_flagged', 0)} "
-                 f"(Real: {wm.get('real_flagged', 0)}, Fake: {wm.get('fake_flagged', 0)})")
-    lines.append("")
-    if wm.get("sample_indicators"):
-        lines.append("### Flagged Sample Indicators (up to 10)")
-        lines.append("")
-        for item in wm["sample_indicators"]:
-            lines.append(f"- **Sample:** `{item['sample_id']}` ({item['label']}): {', '.join(item['indicators'])}")
-        lines.append("")
-
     lines.append("---")
     lines.append("*Report generated by ForenSight Dataset Audit Toolkit (Task 0.3).*")
     lines.append("")
@@ -1460,11 +1182,8 @@ __all__ = [
     "calculate_jpeg_quality_buckets",
     "calculate_resolution_counts",
     "calculate_source_balance",
-    "compute_dhash",
     "compute_file_sha256",
-    "detect_watermark_shortcuts",
     "estimate_jpeg_quality",
     "extract_image_attributes",
     "generate_audit_markdown",
-    "hamming_distance",
 ]

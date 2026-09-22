@@ -288,8 +288,6 @@ def build_default_inventory() -> DatasetInventory:
       1. GenImage (8 generators: SD1.4 [train + in-domain], SD1.5 [near-OOD],
          Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN [cross-generator OOD])
       2. GenImage++ (modern external, test-only: FLUX.1, SD3, etc.)
-      3. WildRF (real-world external, test-only)
-      4. Chameleon (optional external, test-only)
     """
     genimage_subsets = [
         GeneratorSubset(
@@ -305,10 +303,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 360000,
             },
             local_path="data/raw/genimage/sdv4",
-            download_urls=[
-                "https://github.com/GenImage-Dataset/GenImage",
-                "https://huggingface.co/datasets/GenImage/GenImage",
-            ],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Primary training source and in-domain held-out validation/test split for Stage 1.",
         ),
         GeneratorSubset(
@@ -322,7 +317,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/sdv5",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Near-OOD evaluation: same model family and architecture with updated weights.",
         ),
         GeneratorSubset(
@@ -336,7 +331,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/midjourney",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: closed-source commercial text-to-image generator.",
         ),
         GeneratorSubset(
@@ -350,7 +345,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/adm",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: pixel-space diffusion model with classifier guidance.",
         ),
         GeneratorSubset(
@@ -364,7 +359,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/glide",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: filtered pixel-space diffusion model.",
         ),
         GeneratorSubset(
@@ -378,7 +373,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/wukong",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: Chinese text-to-image diffusion model.",
         ),
         GeneratorSubset(
@@ -392,7 +387,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/vqdm",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: vector-quantized discrete diffusion model.",
         ),
         GeneratorSubset(
@@ -406,7 +401,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 40000,
             },
             local_path="data/raw/genimage/biggan",
-            download_urls=["https://github.com/GenImage-Dataset/GenImage"],
+            download_urls=["https://huggingface.co/datasets/ENSTA-U2IS/GenImage"],
             notes="Cross-generator OOD: non-diffusion GAN architecture baseline.",
         ),
     ]
@@ -415,7 +410,7 @@ def build_default_inventory() -> DatasetInventory:
         name="genimage",
         display_name="GenImage",
         version="1.0 (NeurIPS 2023)",
-        source="https://github.com/GenImage-Dataset/GenImage",
+        source="https://huggingface.co/datasets/ENSTA-U2IS/GenImage",
         evaluation_role="Primary Stage 1 benchmark (train, in-domain val/test, near-OOD, cross-generator OOD)",
         real_source="ImageNet (ILSVRC2012)",
         fake_generators=[
@@ -447,13 +442,17 @@ def build_default_inventory() -> DatasetInventory:
         ),
         label_mapping={"real": 0, "fake": 1},
         license="GenImage: Apache-2.0 / Research Use; ImageNet: Non-commercial educational and research terms.",
-        access_requirements="Open research download via official GenImage repository (Google Drive / Baidu Netdisk / Hugging Face mirrors).",
+        access_requirements=(
+            "Open research download from the Hugging Face mirror ENSTA-U2IS/GenImage. "
+            "ForenSight pins the resolved Hub commit SHA before downloading."
+        ),
         local_path="data/raw/genimage",
         generator_subsets=genimage_subsets,
         download_instructions=[
-            "Clone or visit official repo: https://github.com/GenImage-Dataset/GenImage",
-            "Download SD1.4 (imagenet_ai_0419_sdv4) into data/raw/genimage/sdv4",
-            "Download remaining generators into corresponding data/raw/genimage/<generator> directories as needed for cross-generator testing",
+            "Install project dependencies: pip install -e .",
+            "Download SD1.4 only: python scripts/download_dataset.py --dataset genimage --generator sd14",
+            "Archives are stored under data/raw/genimage/_downloads/sd14 with source.json recording the pinned Hub commit SHA.",
+            "Extract the multi-part SD1.4 archive into data/raw/genimage/sdv4 before building manifests and running the R0 audit.",
         ],
         notes=(
             "Primary benchmark for Stage 1. Training is strictly restricted to SD1.4 subset to test cross-generator generalization. "
@@ -504,90 +503,12 @@ def build_default_inventory() -> DatasetInventory:
         notes="Evaluation-only. Used to test generalization to latest generative architectures (FLUX, SD3) without tuning hyperparameters.",
     )
 
-    wildrf_subsets = [
-        GeneratorSubset(
-            generator_id="social_wild",
-            generator_name="Social Media In-The-Wild AI-Generated Images",
-            role="real_world_external",
-            resolution="Variable web resolutions (400x400 to 2048x2048+)",
-            estimated_count={"total": 12000},
-            local_path="data/raw/wildrf",
-            download_urls=["https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld"],
-            notes="Real-world distribution subjected to social platform recompression, resizing, and screenshotting.",
-        )
-    ]
-
-    wildrf_entry = DatasetEntry(
-        name="wildrf",
-        display_name="WildRF",
-        version="1.0 (2024)",
-        source="https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld",
-        evaluation_role="Real-world external benchmark (test-only, evaluation hierarchy level 5)",
-        real_source="Social media and open web platforms (Reddit, Twitter/X, Instagram, news media)",
-        fake_generators=[
-            "In-the-wild AI generators (Midjourney v5/v6, DALL-E 2/3, Stable Diffusion XL, Firefly, online tools)",
-        ],
-        image_count={"real": 6000, "fake": 6000, "total": 12000},
-        resolution_distribution="Highly variable resolutions and aspect ratios matching organic user uploads.",
-        format_compression="JPEG, WebP, PNG; multiple generations of platform lossy compression and metadata stripping.",
-        label_mapping={"real": 0, "fake": 1},
-        license="Academic research use only.",
-        access_requirements="Publicly accessible via repository download links.",
-        local_path="data/raw/wildrf",
-        generator_subsets=wildrf_subsets,
-        download_instructions=[
-            "Refer to https://github.com/barcavia/RealTime-DeepfakeDetection-in-the-RealWorld for download scripts and Google Drive archive links.",
-            "Extract contents into data/raw/wildrf.",
-        ],
-        notes="Evaluation-only benchmark to diagnose robustness against uncontrolled real-world social media artifacts.",
-    )
-
-    chameleon_subsets = [
-        GeneratorSubset(
-            generator_id="aide_human_hard",
-            generator_name="AIDE/Chameleon Human-Hard Deepfakes",
-            role="optional_external",
-            resolution="High resolution (1024x1024 to 2048x2048+)",
-            estimated_count={"total": 6000},
-            local_path="data/raw/chameleon",
-            download_urls=["https://github.com/shilinyan99/AIDE"],
-            notes="Curated challenging synthetic images where visual artifacts are subtle or imperceptible.",
-        )
-    ]
-
-    chameleon_entry = DatasetEntry(
-        name="chameleon",
-        display_name="Chameleon (AIDE Benchmark)",
-        version="1.0 (2024)",
-        source="https://github.com/shilinyan99/AIDE",
-        evaluation_role="Optional external benchmark (test-only, evaluation hierarchy level 6)",
-        real_source="High-quality professional photography (Unsplash, RAISE, photographic datasets)",
-        fake_generators=[
-            "Human-hard photorealistic modern generative models curated to fool human observers",
-        ],
-        image_count={"real": 3000, "fake": 3000, "total": 6000},
-        resolution_distribution="High resolution (1024x1024 and variable high-res photography).",
-        format_compression="High quality JPEG and PNG with minimal artifact distortion.",
-        label_mapping={"real": 0, "fake": 1},
-        license="Restricted research license (agreement required upon request).",
-        access_requirements="Requires formal access request via Google Form / author contact as specified in the AIDE repository.",
-        local_path="data/raw/chameleon",
-        generator_subsets=chameleon_subsets,
-        download_instructions=[
-            "Submit access request form via https://github.com/shilinyan99/AIDE.",
-            "Upon approval, download archives and extract into data/raw/chameleon.",
-        ],
-        notes="Optional benchmark in Stage 1; development and verification can proceed without blocking on access approval.",
-    )
-
     inventory = DatasetInventory(
         schema_version="1.0.0",
-        updated_at="2026-09-18",
+        updated_at="2026-09-22",
         datasets={
             "genimage": genimage_entry,
             "genimage_plus_plus": genimage_plus_plus_entry,
-            "wildrf": wildrf_entry,
-            "chameleon": chameleon_entry,
         },
     )
     return inventory

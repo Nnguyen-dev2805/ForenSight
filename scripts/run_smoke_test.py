@@ -6,7 +6,7 @@ external downloads:
 1. Inventory verification (load_inventory, schema & field validation).
 2. Smoke dataset and manifest generation (4 splits, lightweight JPEG images).
 3. Invariant assertions (generator-disjointness, zero sample/generator leakage).
-4. Dataset audit execution (image attributes, near-duplicates, leakage check).
+4. Dataset audit execution (image attributes, exact duplicates, leakage check).
 5. Synthetic model predictions simulation across 3 distinct seeds.
 6. Model evaluation runner on each seed (validation threshold calibration).
 7. Multi-seed repeated run aggregation (mean, std, preliminary check).

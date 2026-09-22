@@ -369,7 +369,6 @@ def run_smoke_pipeline(
         manifest=train_manifest,
         manifest_name="smoke_train_audit",
         max_workers=2,
-        compute_phash=True,
         leakage_check_results=leakage_audit,
     )
 

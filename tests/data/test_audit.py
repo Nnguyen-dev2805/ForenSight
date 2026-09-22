@@ -19,19 +19,17 @@ from forensight.data.audit import (
     calculate_jpeg_quality_buckets,
     calculate_resolution_counts,
     calculate_source_balance,
-    compute_dhash,
     compute_file_sha256,
-    detect_watermark_shortcuts,
     estimate_jpeg_quality,
     extract_image_attributes,
     generate_audit_markdown,
-    hamming_distance,
 )
 from forensight.data.split import Manifest, ManifestRecord
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+# pyrefly: ignore [missing-import]
 import scripts.check_dataset as cli
 
 
@@ -58,13 +56,7 @@ def synthetic_image_dir(tmp_path: Path) -> Path:
     dup_im.save(img_dir / "dup_original.jpg", format="JPEG", quality=80)
     dup_im.save(img_dir / "dup_copy.jpg", format="JPEG", quality=80)
 
-    # 4. Near-duplicate images (same content, slight resize)
-    near_im1 = Image.new("RGB", (300, 300), color=(123, 123, 123))
-    near_im2 = Image.new("RGB", (310, 310), color=(123, 123, 123))
-    near_im1.save(img_dir / "near_orig.png", format="PNG")
-    near_im2.save(img_dir / "near_scale.png", format="PNG")
-
-    # 5. PNG format images
+    # 4. PNG format images
     png_im = Image.new("RGB", (200, 200), color=(20, 200, 20))
     png_im.save(img_dir / "fake_png.png", format="PNG")
 
@@ -93,23 +85,6 @@ class TestImageAttributeExtraction:
         with Image.open(buf) as loaded:
             assert estimate_jpeg_quality(loaded) is None
 
-    def test_compute_dhash_and_hamming_distance(self):
-        im1 = Image.new("RGB", (100, 100), (255, 0, 0))
-        im2 = Image.new("RGB", (200, 200), (255, 0, 0))
-        h1 = compute_dhash(im1)
-        h2 = compute_dhash(im2)
-        assert len(h1) == 16
-        assert hamming_distance(h1, h2) == 0
-
-        # Different patterns yield non-zero hamming distance
-        im3 = Image.new("RGB", (100, 100), (0, 0, 0))
-        for x in range(100):
-            for y in range(100):
-                if (x // 10) % 2 == 0:
-                    im3.putpixel((x, y), (255, 255, 255))
-        h3 = compute_dhash(im3)
-        assert hamming_distance(h1, h3) > 0
-
     def test_compute_file_sha256(self, tmp_path: Path):
         test_file = tmp_path / "test.bin"
         data = b"ForenSight test content 12345"
@@ -136,7 +111,6 @@ class TestImageAttributeExtraction:
         assert attrs.jpeg_quality is not None
         assert abs(attrs.jpeg_quality - 75) <= 3
         assert len(attrs.sha256) == 64
-        assert attrs.phash is not None
 
     def test_extract_image_attributes_missing_file_handles_gracefully(self, tmp_path: Path):
         rec = ManifestRecord(
@@ -168,28 +142,6 @@ class TestImageAttributeExtraction:
         assert attrs.error is not None
         assert "Error reading image" in attrs.error
         assert attrs.format == "CORRUPT"
-
-    def test_detect_watermark_shortcuts_metadata(self):
-        im = Image.new("RGB", (100, 100), (128, 128, 128))
-        im.info["comment"] = "Copyright Shutterstock 2024"
-        indicators = detect_watermark_shortcuts(im)
-        assert any("shutterstock" in ind for ind in indicators)
-
-    def test_detect_watermark_shortcuts_letterbox(self):
-        # Create image with texture in center and solid black bars on top and bottom
-        im = Image.new("RGB", (100, 100), (0, 0, 0))
-        # Center rows 20 to 80 textured
-        for y in range(20, 80):
-            for x in range(100):
-                im.putpixel((x, y), ((x * 5) % 255, (y * 5) % 255, 100))
-        indicators = detect_watermark_shortcuts(im)
-        assert any("letterbox" in ind for ind in indicators)
-
-    def test_detect_watermark_shortcuts_clean(self):
-        # Clean uniform or textured image without border
-        im = Image.new("RGB", (100, 100), (128, 128, 128))
-        indicators = detect_watermark_shortcuts(im)
-        assert len(indicators) == 0
 
 
 class TestDistributionStatistics:
@@ -362,7 +314,7 @@ class TestAuditManifestImages:
         )
 
         manifest = Manifest(records)
-        report = audit_manifest_images(manifest, max_workers=2, near_duplicate_threshold=2)
+        report = audit_manifest_images(manifest, max_workers=2)
 
         assert report.total_samples == 12
         assert report.num_real == 7
@@ -488,20 +440,7 @@ class TestCLIExecution:
 
 
 class TestAuditEdgeCasesAndFeatures:
-    """Tests for near duplicates, format disparity, empty manifests, and report persistence."""
-
-    def test_near_duplicate_detection(self, synthetic_image_dir: Path):
-        # near_orig.png and near_scale.png have distance 0 or <= 2
-        records = [
-            ManifestRecord(sample_id="near_1", image_path=str(synthetic_image_dir / "near_orig.png"), label=0, dataset="g", generator="nature", split="train"),
-            ManifestRecord(sample_id="near_2", image_path=str(synthetic_image_dir / "near_scale.png"), label=0, dataset="g", generator="nature", split="train"),
-        ]
-        report = audit_manifest_images(records, compute_phash=True, near_duplicate_threshold=2)
-        assert len(report.near_duplicate_check) >= 1
-        entry = report.near_duplicate_check[0]
-        assert "near_1" in entry["sample_ids"]
-        assert "near_2" in entry["sample_ids"]
-        assert entry["distance"] <= 2
+    """Tests for format disparity, empty manifests, and report persistence."""
 
     def test_format_disparity_detection(self, synthetic_image_dir: Path):
         records = [
@@ -539,21 +478,6 @@ class TestAuditEdgeCasesAndFeatures:
         assert loaded["total_samples"] == 1
         assert "ForenSight Dataset Audit Report" in md_file.read_text(encoding="utf-8")
 
-    def test_near_duplicate_skipped_when_exceeding_limit(self, synthetic_image_dir: Path):
-        records = [
-            ManifestRecord(sample_id=f"r_{i}", image_path=str(synthetic_image_dir / f"real_{i}.jpg"), label=0, dataset="g", generator="nature", split="train")
-            for i in range(5)
-        ]
-        # Set max_near_duplicate_candidates=3 so 5 records exceeds it and triggers skip
-        report = audit_manifest_images(records, compute_phash=True, max_near_duplicate_candidates=3)
-        assert report.metadata.get("near_duplicate_skipped") is True
-        finding = next(f for f in report.summary_findings if f["check"] == "near_duplicates")
-        assert finding["status"] == "SKIPPED"
-        assert "exceeds pairwise limit" in finding["message"]
-
-        md = report.generate_markdown()
-        assert "SKIPPED (sample size exceeds pairwise limit)" in md
-
     def test_source_balance_and_correlation_finding(self, synthetic_image_dir: Path):
         # Real images come from dataset 'source_a', fake images from 'source_b'
         records = [
@@ -576,35 +500,3 @@ class TestAuditEdgeCasesAndFeatures:
         assert "- **Distinct Sources:** 2 (source_a, source_b)" in md
         assert "| `source_a` | 1 (100.0%) | 0 (0.0%) | 1 (50.0%) |" in md
         assert "| `source_b` | 0 (0.0%) | 1 (100.0%) | 1 (50.0%) |" in md
-
-    def test_watermark_shortcuts_audit_finding(self, tmp_path: Path):
-        # Create one real image with watermark comment and one clean fake image
-        wm_img_path = tmp_path / "watermarked_real.png"
-        clean_img_path = tmp_path / "clean_fake.png"
-
-        from PIL import PngImagePlugin
-
-        im_wm = Image.new("RGB", (64, 64), (100, 100, 100))
-        meta = PngImagePlugin.PngInfo()
-        meta.add_text("comment", "stock watermark")
-        im_wm.save(wm_img_path, format="PNG", pnginfo=meta)
-
-        im_clean = Image.new("RGB", (64, 64), (200, 200, 200))
-        im_clean.save(clean_img_path)
-
-        records = [
-            ManifestRecord(sample_id="wm_real", image_path=str(wm_img_path), label=0, dataset="g", generator="nature", split="train"),
-            ManifestRecord(sample_id="clean_fake", image_path=str(clean_img_path), label=1, dataset="g", generator="sd14", split="train"),
-        ]
-        report = audit_manifest_images(records)
-        assert report.watermark_stats["total_flagged"] == 1
-        assert report.watermark_stats["real_flagged"] == 1
-        assert report.watermark_stats["fake_flagged"] == 0
-
-        finding = next(f for f in report.summary_findings if f["check"] == "watermark_shortcuts")
-        assert finding["status"] == "WARNING"
-        assert "Watermark shortcut alert" in finding["message"]
-
-        md = report.generate_markdown()
-        assert "## 8. Watermark & Artifact Shortcut Analysis" in md
-        assert "Images with Watermark/Border Indicators:** 1 (Real: 1, Fake: 0)" in md

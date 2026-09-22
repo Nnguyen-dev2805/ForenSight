@@ -77,12 +77,6 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Number of concurrent worker threads for image inspection (default: 4).",
     )
     parser.add_argument(
-        "--near-duplicate-threshold",
-        type=int,
-        default=2,
-        help="Hamming distance threshold for near-duplicate dHash detection (default: 2).",
-    )
-    parser.add_argument(
         "--sample-size",
         type=int,
         default=None,
@@ -167,8 +161,6 @@ def main(cli_args: Sequence[str] | None = None) -> int:
         base_dir=args.base_dir,
         manifest_name=audit_name,
         max_workers=args.max_workers,
-        compute_phash=True,
-        near_duplicate_threshold=args.near_duplicate_threshold,
         leakage_check_results=leakage_results,
     )
 
@@ -179,7 +171,6 @@ def main(cli_args: Sequence[str] | None = None) -> int:
         print(f"=======================================================")
         print(f"Total Samples Audited: {report.total_samples} (Real: {report.num_real}, Fake: {report.num_fake})")
         print(f"Exact Duplicates (SHA256): {len(report.duplicate_check)} group(s)")
-        print(f"Near Duplicates (dHash):   {len(report.near_duplicate_check)} pair(s)")
         print(f"Split Collisions:          {len(report.sample_leakage)} collision(s)")
         print(f"Generator Overlaps:        {len(report.generator_leakage)} leak(s)")
         print(f"-------------------------------------------------------")
