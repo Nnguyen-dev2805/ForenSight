@@ -26,6 +26,11 @@ from forensight.data.inventory import (
     load_inventory,
     save_inventory,
 )
+from forensight.data.r2_dataset import (
+    R2ImageDataset,
+    build_forensic_input_transform,
+    load_manifest_file,
+)
 from forensight.data.smoke import (
     generate_smoke_dataset,
     run_smoke_pipeline,
@@ -54,6 +59,7 @@ __all__ = [
     "ManifestRecord",
     "NON_GENERATOR_LABELS",
     "PROTOCOL_V1_SPLITS",
+    "R2ImageDataset",
     "SCALE_TIERS",
     "STD_LUMINANCE_QUANT_TBL",
     "VALID_SPLIT_NAMES",
@@ -61,6 +67,7 @@ __all__ = [
     "audit_manifest_images",
     "audit_manifest_leakage",
     "build_default_inventory",
+    "build_forensic_input_transform",
     "calculate_class_balance",
     "calculate_distribution_stats",
     "calculate_format_stats",
@@ -76,6 +83,7 @@ __all__ = [
     "get_default_inventory",
     "get_generator_membership_summary",
     "load_inventory",
+    "load_manifest_file",
     "run_smoke_pipeline",
     "save_inventory",
     "subsample_manifest_by_class",
