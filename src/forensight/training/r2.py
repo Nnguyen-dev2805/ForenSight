@@ -1,0 +1,191 @@
+"""Shared training utilities for ForenSight R2 experiments.
+
+Provides unified execution across Semantic-only, Forensic-only, and Fusion
+detector variants: seed initialization, config loading, forward dispatch,
+epoch training/validation, atomic checkpointing, and R0-compatible prediction export.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import DataLoader
+
+from forensight.evaluation.runner import PredictionRecord, PredictionSet
+
+
+VALID_VARIANTS = {"semantic", "forensic", "fusion"}
+REQUIRED_CONFIG_SECTIONS = {"model", "training", "evaluation"}
+
+
+def set_seed(seed: int) -> None:
+    """Set random seed across python standard library, numpy, and pytorch."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def load_r2_config(path: str | Path) -> dict[str, Any]:
+    """Load and validate an R2 JSON experiment configuration."""
+    path = Path(path)
+    with path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    variant = config.get("variant")
+    if variant not in VALID_VARIANTS:
+        raise ValueError(
+            f"Unsupported R2 variant: {variant!r}. Must be one of {sorted(VALID_VARIANTS)}"
+        )
+
+    for section in REQUIRED_CONFIG_SECTIONS:
+        if section not in config or not isinstance(config[section], dict):
+            raise ValueError(f"Missing required configuration section: '{section}'")
+
+    return config
+
+
+def forward_variant(
+    model: nn.Module,
+    batch: dict[str, Any],
+    *,
+    variant: str,
+    device: torch.device,
+) -> torch.Tensor:
+    """Dispatch batch inputs to model based on the active variant."""
+    if variant == "semantic":
+        return model(batch["clip_image"].to(device))
+    if variant == "forensic":
+        return model(batch["forensic_image"].to(device))
+    if variant == "fusion":
+        return model(
+            batch["clip_image"].to(device),
+            batch["forensic_image"].to(device),
+        )
+    raise ValueError(f"Unsupported R2 variant: {variant}")
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    *,
+    device: torch.device,
+    variant: str,
+) -> float:
+    """Run one epoch of training and return average BCEWithLogitsLoss."""
+    model.train()
+    criterion = nn.BCEWithLogitsLoss()
+    total_loss = 0.0
+    num_batches = 0
+
+    for batch in loader:
+        optimizer.zero_grad()
+        labels = batch["label"].to(device).float().view(-1, 1)
+        logits = forward_variant(model, batch, variant=variant, device=device)
+        loss = criterion(logits, labels)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += float(loss.item())
+        num_batches += 1
+
+    return total_loss / max(1, num_batches)
+
+
+@torch.no_grad()
+def validate_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    variant: str,
+) -> float:
+    """Run validation pass and return average BCEWithLogitsLoss."""
+    model.eval()
+    criterion = nn.BCEWithLogitsLoss()
+    total_loss = 0.0
+    num_batches = 0
+
+    for batch in loader:
+        labels = batch["label"].to(device).float().view(-1, 1)
+        logits = forward_variant(model, batch, variant=variant, device=device)
+        loss = criterion(logits, labels)
+        total_loss += float(loss.item())
+        num_batches += 1
+
+    return total_loss / max(1, num_batches)
+
+
+def save_checkpoint(
+    path: str | Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    *,
+    epoch: int,
+    config: dict[str, Any],
+) -> None:
+    """Save model and optimizer state alongside training epoch and config."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "config": config,
+    }
+    torch.save(state, path)
+
+
+def load_checkpoint(
+    path: str | Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer | None = None,
+    *,
+    map_location: str | torch.device = "cpu",
+) -> dict[str, Any]:
+    """Load model and optional optimizer state from a checkpoint file."""
+    checkpoint = torch.load(path, map_location=map_location)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return checkpoint
+
+
+@torch.no_grad()
+def predict_to_prediction_set(
+    model: nn.Module,
+    loader: DataLoader,
+    *,
+    device: torch.device,
+    variant: str,
+) -> PredictionSet:
+    """Run inference over a loader and return a ForenSight PredictionSet."""
+    model.eval()
+    records: list[PredictionRecord] = []
+
+    for batch in loader:
+        logits = forward_variant(model, batch, variant=variant, device=device)
+        scores = torch.sigmoid(logits).squeeze(1).cpu().tolist()
+        batch_size = len(scores)
+
+        for index in range(batch_size):
+            records.append(
+                PredictionRecord(
+                    sample_id=str(batch["sample_id"][index]),
+                    label=int(batch["label"][index].item()),
+                    score=float(scores[index]),
+                    split=str(batch["split"][index]),
+                    generator=str(batch["generator"][index]),
+                    dataset=str(batch["dataset"][index]),
+                )
+            )
+
+    return PredictionSet(records)
