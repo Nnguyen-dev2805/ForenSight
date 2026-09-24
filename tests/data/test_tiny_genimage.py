@@ -11,6 +11,8 @@ from forensight.data.split import assert_generator_disjoint, validate_no_leakage
 from forensight.data.tiny_genimage import (
     CROSS_GENERATOR_OOD_IDS,
     TINY_GENIMAGE_GENERATOR_MAP,
+    build_all_in_one_manifests,
+    build_logo_manifests,
     build_tiny_genimage_manifests,
     detect_image_extension,
     download_tiny_genimage_parquets,
@@ -287,3 +289,138 @@ class TestMockHfDownload:
         assert "validation" in splits
         assert len(splits["train"]) == 1
         assert len(splits["validation"]) == 1
+
+
+class TestMultiGeneratorManifests:
+    def _build_multi_gen_records(self) -> list[dict]:
+        records = []
+        counter = 0
+        gens = ["sd15", "midjourney", "wukong", "glide", "vqdm", "biggan", "adm"]
+
+        # Raw train: 140 real, 20 fake per generator (total 140 fake)
+        for i in range(140):
+            records.append({
+                "sample_id": f"train_real_{i}",
+                "image_path": f"nature/train/nature_{i}.png",
+                "label": 0,
+                "generator": "nature",
+                "raw_split": "train",
+                "index": counter,
+            })
+            counter += 1
+
+        for gen in gens:
+            for i in range(20):
+                records.append({
+                    "sample_id": f"train_{gen}_{i}",
+                    "image_path": f"{gen}/train/{gen}_{i}.png",
+                    "label": 1,
+                    "generator": gen,
+                    "raw_split": "train",
+                    "index": counter,
+                })
+                counter += 1
+
+        # Raw validation: 70 real, 10 fake per generator (total 70 fake)
+        for i in range(70):
+            records.append({
+                "sample_id": f"val_real_{i}",
+                "image_path": f"nature/val/nature_{i}.png",
+                "label": 0,
+                "generator": "nature",
+                "raw_split": "validation",
+                "index": counter,
+            })
+            counter += 1
+
+        for gen in gens:
+            for i in range(10):
+                records.append({
+                    "sample_id": f"val_{gen}_{i}",
+                    "image_path": f"{gen}/val/{gen}_{i}.png",
+                    "label": 1,
+                    "generator": gen,
+                    "raw_split": "validation",
+                    "index": counter,
+                })
+                counter += 1
+
+        return records
+
+    def test_build_logo_manifests_zero_leakage(self, tmp_path: Path):
+        records = self._build_multi_gen_records()
+        manifest_dir = tmp_path / "logo_manifests"
+
+        manifests = build_logo_manifests(
+            extracted_records=records,
+            manifest_dir=manifest_dir,
+            leave_out_gen="midjourney",
+            n_val_per_gen=2,
+        )
+
+        train_m = manifests["train"]
+        val_m = manifests["val"]
+        test_held_out = manifests["test_midjourney"]
+        test_seen = manifests["test_in_domain_seen"]
+
+        # 1. Zero generator leakage: midjourney must NEVER appear in train or val
+        assert "midjourney" not in {r.generator for r in train_m if r.label == 1}
+        assert "midjourney" not in {r.generator for r in val_m if r.label == 1}
+        assert_generator_disjoint(train_m, test_held_out)
+        assert_generator_disjoint(val_m, test_held_out)
+
+        # 2. Held-out test set contains midjourney fakes and balanced reals
+        assert all(r.generator == "midjourney" for r in test_held_out if r.label == 1)
+        reals = len(test_held_out.filter(label=0))
+        fakes = len(test_held_out.filter(label=1))
+        assert reals == fakes and fakes > 0
+
+        # 3. Label balance across all splits
+        for name, m in manifests.items():
+            r_cnt = len(m.filter(label=0))
+            f_cnt = len(m.filter(label=1))
+            assert r_cnt == f_cnt, f"Split {name} unbalanced: {r_cnt} reals vs {f_cnt} fakes"
+
+        # 4. Check files created
+        assert (manifest_dir / "train.jsonl").exists()
+        assert (manifest_dir / "test_midjourney.jsonl").exists()
+
+    def test_build_all_in_one_manifests(self, tmp_path: Path):
+        records = self._build_multi_gen_records()
+        manifest_dir = tmp_path / "all_in_one_manifests"
+
+        manifests = build_all_in_one_manifests(
+            extracted_records=records,
+            manifest_dir=manifest_dir,
+            n_val_per_gen=2,
+        )
+
+        train_m = manifests["train"]
+        val_m = manifests["val"]
+        test_combined = manifests["test_all_combined"]
+
+        # 1. All 7 generators present in train, val, and test
+        expected_gens = {"sd15", "midjourney", "wukong", "glide", "vqdm", "biggan", "adm"}
+        train_fakes_gens = {r.generator for r in train_m if r.label == 1}
+        val_fakes_gens = {r.generator for r in val_m if r.label == 1}
+        test_fakes_gens = {r.generator for r in test_combined if r.label == 1}
+
+        assert train_fakes_gens == expected_gens
+        assert val_fakes_gens == expected_gens
+        assert test_fakes_gens == expected_gens
+
+        # 2. Mutually disjoint sample IDs between train, val, test
+        train_ids = {r.sample_id for r in train_m}
+        val_ids = {r.sample_id for r in val_m}
+        test_ids = {r.sample_id for r in test_combined}
+
+        assert train_ids.isdisjoint(val_ids)
+        assert train_ids.isdisjoint(test_ids)
+        assert val_ids.isdisjoint(test_ids)
+
+        # 3. Label balance (1:1)
+        for name, m in manifests.items():
+            r_cnt = len(m.filter(label=0))
+            f_cnt = len(m.filter(label=1))
+            assert r_cnt == f_cnt, f"Split {name} unbalanced: {r_cnt} reals vs {f_cnt} fakes"
+

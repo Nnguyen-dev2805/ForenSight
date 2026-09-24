@@ -400,3 +400,300 @@ def build_tiny_genimage_manifests(
         logger.info("Saved %s with %d records to %s", name, len(manifest), out_path)
 
     return manifests
+
+
+def build_logo_manifests(
+    extracted_records: Sequence[dict[str, Any]],
+    manifest_dir: str | Path | None = None,
+    leave_out_gen: str = "midjourney",
+    dataset_name: str = "genimage",
+    n_val_per_gen: int = 100,
+    seed: int = 42,
+) -> dict[str, Manifest]:
+    """Construct Leave-One-Generator-Out (LOGO) manifests.
+
+    Guarantees:
+    - `leave_out_gen` appears ONLY in `test_<leave_out_gen>` (held-out test split).
+    - `leave_out_gen` NEVER appears in train or val splits (zero generator leakage).
+    - All other generators are used for training and in-domain validation/testing.
+    - Strict 1:1 real:fake balance across all splits.
+    - Mutually disjoint real image allocation.
+    """
+    if manifest_dir is not None:
+        manifest_dir = Path(manifest_dir)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    all_fake_gens = sorted(list({r["generator"] for r in extracted_records if r["label"] == 1}))
+    if leave_out_gen not in all_fake_gens:
+        raise ValueError(f"leave_out_gen '{leave_out_gen}' not found in records: {all_fake_gens}")
+
+    seen_gens = [g for g in all_fake_gens if g != leave_out_gen]
+
+    train_reals = [r for r in extracted_records if r["raw_split"] == "train" and r["label"] == 0]
+    val_reals = [r for r in extracted_records if r["raw_split"] == "validation" and r["label"] == 0]
+
+    # Build Train: all train fakes from seen_gens
+    train_fakes = [r for r in extracted_records if r["raw_split"] == "train" and r["generator"] in seen_gens and r["label"] == 1]
+    n_train_reals = min(len(train_fakes), len(train_reals))
+    selected_train_fakes = train_fakes[:n_train_reals]
+    selected_train_reals = train_reals[:n_train_reals]
+
+    train_records = [
+        ManifestRecord(
+            sample_id=r["sample_id"],
+            image_path=r["image_path"],
+            label=1,
+            dataset=dataset_name,
+            generator=r["generator"],
+            split="train",
+        )
+        for r in selected_train_fakes
+    ] + [
+        ManifestRecord(
+            sample_id=r["sample_id"],
+            image_path=r["image_path"],
+            label=0,
+            dataset=dataset_name,
+            generator="nature",
+            split="train",
+        )
+        for r in selected_train_reals
+    ]
+
+    real_offset = 0
+
+    def allocate_reals(n: int, split_name: str) -> list[ManifestRecord]:
+        nonlocal real_offset
+        allocated = val_reals[real_offset : real_offset + n]
+        real_offset += len(allocated)
+        return [
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=0,
+                dataset=dataset_name,
+                generator="nature",
+                split=split_name,
+            )
+            for r in allocated
+        ]
+
+    val_records: list[ManifestRecord] = []
+    test_seen_records: list[ManifestRecord] = []
+
+    for gen in seen_gens:
+        gen_val_fakes = [r for r in extracted_records if r["raw_split"] == "validation" and r["generator"] == gen and r["label"] == 1]
+        n_val = min(n_val_per_gen, len(gen_val_fakes) // 2) if len(gen_val_fakes) >= 2 else len(gen_val_fakes)
+        cur_val_fakes = gen_val_fakes[:n_val]
+        cur_test_fakes = gen_val_fakes[n_val:]
+
+        val_records.extend([
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=1,
+                dataset=dataset_name,
+                generator=gen,
+                split="val",
+            )
+            for r in cur_val_fakes
+        ])
+        val_records.extend(allocate_reals(len(cur_val_fakes), "val"))
+
+        test_seen_records.extend([
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=1,
+                dataset=dataset_name,
+                generator=gen,
+                split="in_domain_test",
+            )
+            for r in cur_test_fakes
+        ])
+        test_seen_records.extend(allocate_reals(len(cur_test_fakes), "in_domain_test"))
+
+    # Build Held-out Test: all available fakes of leave_out_gen
+    held_out_fakes = [r for r in extracted_records if r["generator"] == leave_out_gen and r["label"] == 1]
+    n_held_out = len(held_out_fakes)
+    remaining_val_reals_count = len(val_reals) - real_offset
+    held_out_reals: list[ManifestRecord] = []
+
+    if remaining_val_reals_count >= n_held_out:
+        held_out_reals = allocate_reals(n_held_out, "cross_generator_ood")
+    else:
+        held_out_reals.extend(allocate_reals(remaining_val_reals_count, "cross_generator_ood"))
+        needed_from_train = n_held_out - len(held_out_reals)
+        unused_train_reals = train_reals[n_train_reals : n_train_reals + needed_from_train]
+        held_out_reals.extend([
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=0,
+                dataset=dataset_name,
+                generator="nature",
+                split="cross_generator_ood",
+            )
+            for r in unused_train_reals
+        ])
+
+    if len(held_out_reals) < len(held_out_fakes):
+        held_out_fakes = held_out_fakes[:len(held_out_reals)]
+
+    test_held_out_records = [
+        ManifestRecord(
+            sample_id=r["sample_id"],
+            image_path=r["image_path"],
+            label=1,
+            dataset=dataset_name,
+            generator=leave_out_gen,
+            split="cross_generator_ood",
+        )
+        for r in held_out_fakes
+    ] + held_out_reals
+
+    train_manifest = Manifest(train_records)
+    val_manifest = Manifest(val_records)
+    test_held_out_manifest = Manifest(test_held_out_records)
+    test_seen_manifest = Manifest(test_seen_records)
+
+    manifests = {
+        "train": train_manifest,
+        "val": val_manifest,
+        f"test_{leave_out_gen}": test_held_out_manifest,
+        "test_in_domain_seen": test_seen_manifest,
+    }
+
+    if manifest_dir is not None:
+        for name, m in manifests.items():
+            out_file = manifest_dir / f"{name}.jsonl"
+            m.to_jsonl(out_file)
+
+    return manifests
+
+
+def build_all_in_one_manifests(
+    extracted_records: Sequence[dict[str, Any]],
+    manifest_dir: str | Path | None = None,
+    dataset_name: str = "genimage",
+    n_val_per_gen: int = 100,
+    seed: int = 42,
+) -> dict[str, Manifest]:
+    """Construct All-In-One multi-generator manifests to measure empirical upper bound.
+
+    All available generators are present in train, val, and per-generator test sets:
+    - train: all available train fakes (from raw train) + balanced train reals.
+    - val: n_val_per_gen fakes from raw validation + balanced val reals (for tau* calibration).
+    - test_<gen>: remaining val fakes + balanced val reals.
+    - test_all_combined: all per-generator test sets combined.
+    """
+    if manifest_dir is not None:
+        manifest_dir = Path(manifest_dir)
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    all_fake_gens = sorted(list({r["generator"] for r in extracted_records if r["label"] == 1}))
+
+    train_reals = [r for r in extracted_records if r["raw_split"] == "train" and r["label"] == 0]
+    val_reals = [r for r in extracted_records if r["raw_split"] == "validation" and r["label"] == 0]
+
+    train_fakes = [r for r in extracted_records if r["raw_split"] == "train" and r["label"] == 1]
+    n_train_pairs = min(len(train_fakes), len(train_reals))
+    selected_train_fakes = train_fakes[:n_train_pairs]
+    selected_train_reals = train_reals[:n_train_pairs]
+
+    train_records = [
+        ManifestRecord(
+            sample_id=r["sample_id"],
+            image_path=r["image_path"],
+            label=1,
+            dataset=dataset_name,
+            generator=r["generator"],
+            split="train",
+        )
+        for r in selected_train_fakes
+    ] + [
+        ManifestRecord(
+            sample_id=r["sample_id"],
+            image_path=r["image_path"],
+            label=0,
+            dataset=dataset_name,
+            generator="nature",
+            split="train",
+        )
+        for r in selected_train_reals
+    ]
+
+    real_offset = 0
+
+    def allocate_reals(n: int, split_name: str) -> list[ManifestRecord]:
+        nonlocal real_offset
+        allocated = val_reals[real_offset : real_offset + n]
+        real_offset += len(allocated)
+        return [
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=0,
+                dataset=dataset_name,
+                generator="nature",
+                split=split_name,
+            )
+            for r in allocated
+        ]
+
+    val_records: list[ManifestRecord] = []
+    per_gen_test_manifests: dict[str, Manifest] = {}
+    combined_test_records: list[ManifestRecord] = []
+
+    for gen in all_fake_gens:
+        gen_val_fakes = [r for r in extracted_records if r["raw_split"] == "validation" and r["generator"] == gen and r["label"] == 1]
+        n_val = min(n_val_per_gen, len(gen_val_fakes) // 2) if len(gen_val_fakes) >= 2 else len(gen_val_fakes)
+        cur_val_fakes = gen_val_fakes[:n_val]
+        cur_test_fakes = gen_val_fakes[n_val:]
+
+        val_records.extend([
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=1,
+                dataset=dataset_name,
+                generator=gen,
+                split="val",
+            )
+            for r in cur_val_fakes
+        ])
+        val_records.extend(allocate_reals(len(cur_val_fakes), "val"))
+
+        cur_test_reals = allocate_reals(len(cur_test_fakes), "in_domain_test")
+        cur_test_records = [
+            ManifestRecord(
+                sample_id=r["sample_id"],
+                image_path=r["image_path"],
+                label=1,
+                dataset=dataset_name,
+                generator=gen,
+                split="in_domain_test",
+            )
+            for r in cur_test_fakes
+        ] + cur_test_reals
+
+        per_gen_test_manifests[f"test_{gen}"] = Manifest(cur_test_records)
+        combined_test_records.extend(cur_test_records)
+
+    train_manifest = Manifest(train_records)
+    val_manifest = Manifest(val_records)
+    combined_test_manifest = Manifest(combined_test_records)
+
+    manifests = {
+        "train": train_manifest,
+        "val": val_manifest,
+        "test_all_combined": combined_test_manifest,
+    }
+    manifests.update(per_gen_test_manifests)
+
+    if manifest_dir is not None:
+        for name, m in manifests.items():
+            out_file = manifest_dir / f"{name}.jsonl"
+            m.to_jsonl(out_file)
+
+    return manifests
