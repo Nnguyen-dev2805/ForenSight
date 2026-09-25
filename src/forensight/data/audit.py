@@ -568,6 +568,39 @@ def audit_manifest_leakage(
                     f"Generator leakage between train and {split_name}: overlapping fake generator(s) {sorted(gen_overlap)}."
                 )
 
+    # Pairwise cross-evaluation partition disjointness check (e.g. val vs test, test vs ood)
+    eval_names = list(named_evals.keys())
+    for i in range(len(eval_names)):
+        name_i = eval_names[i]
+        ids_i = {r.sample_id for r in named_evals[name_i]}
+        paths_i = {_resolve_path(r.image_path) for r in named_evals[name_i]}
+        for j in range(i + 1, len(eval_names)):
+            name_j = eval_names[j]
+            ids_j = {r.sample_id for r in named_evals[name_j]}
+            paths_j = {_resolve_path(r.image_path) for r in named_evals[name_j]}
+
+            cross_id_overlap = ids_i & ids_j
+            if cross_id_overlap:
+                sample_id_collisions.append({
+                    "eval_split": f"{name_i}_vs_{name_j}",
+                    "count": len(cross_id_overlap),
+                    "colliding_sample_ids": sorted(list(cross_id_overlap))[:10],
+                })
+                violations.append(
+                    f"Sample ID leakage between evaluation partitions {name_i} and {name_j}: {len(cross_id_overlap)} shared IDs."
+                )
+
+            cross_path_overlap = paths_i & paths_j
+            if cross_path_overlap:
+                image_path_collisions.append({
+                    "eval_split": f"{name_i}_vs_{name_j}",
+                    "count": len(cross_path_overlap),
+                    "colliding_paths": [str(p) for p in sorted(list(cross_path_overlap))[:10]],
+                })
+                violations.append(
+                    f"Image path leakage between evaluation partitions {name_i} and {name_j}: {len(cross_path_overlap)} shared paths."
+                )
+
     return {
         "has_leakage": len(violations) > 0,
         "sample_id_collisions": sample_id_collisions,

@@ -60,6 +60,11 @@ def make_dummy_report(
     overall_acc: float = 0.80,
     split_auc: float | None = 0.88,
     gen_auc: float | None = None,
+    sample_set_hash: str = "canonical_test_cohort_hash_01",
+    val_cohort_hash: str = "canonical_val_cohort_hash_01",
+    strategy: str = "f1",
+    model_name: str | None = "ForenSightBaseline",
+    experiment_name: str | None = "r2_baseline",
 ) -> EvaluationReport:
     """Helper to construct dummy EvaluationReport instances."""
     return EvaluationReport(
@@ -74,14 +79,21 @@ def make_dummy_report(
         },
         threshold_metadata={
             "threshold": 0.50,
-            "strategy": "f1",
-            "threshold_source": "val_optimal_f1",
+            "strategy": strategy,
+            "threshold_strategy": strategy,
+            "threshold_source": f"val_optimal_{strategy}",
             "calibrated": True,
+            "val_cohort_hash": val_cohort_hash,
         },
         run_metadata={
             "run_name": f"run_seed_{seed}",
             "evaluated_samples": 200,
             "seed": seed,
+            "sample_set_hash": sample_set_hash,
+            "cohort_hash": sample_set_hash,
+            "val_cohort_hash": val_cohort_hash,
+            "model_name": model_name,
+            "experiment_name": experiment_name,
         },
         by_dataset={
             "genimage": make_metric_result(auroc=0.84, accuracy=0.81),
@@ -532,8 +544,158 @@ class TestEvaluationReportSeedInvariant:
         d = rep.to_dict()
         assert d["seed"] == 42
         rebuilt = EvaluationReport.from_dict(d)
-        assert rebuilt.seed == 42
-
-        # In markdown
         md = rep.generate_markdown()
         assert "- **Seed:** `42`" in md
+
+
+# =====================================================================
+# 7. Cohort and Manifest Consistency Invariant Tests
+# =====================================================================
+
+class TestCohortConsistencyInvariants:
+    """Tests ensuring aggregated reports enforce consistent evaluation splits and versions."""
+
+    def test_mismatched_splits_marks_preliminary_with_warning(self):
+        r1 = make_dummy_report(seed=1)
+        r2 = make_dummy_report(seed=2)
+        # r3 has completely different splits
+        r3 = EvaluationReport(
+            overall=make_metric_result(),
+            by_split={"other_test": make_metric_result()},
+            by_generator={},
+            threshold_metadata={"threshold": 0.5},
+            run_metadata={"seed": 3},
+            seed=3,
+        )
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("splits" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_split_versions_marks_preliminary_with_warning(self):
+        r1 = make_dummy_report(seed=1)
+        r1.run_metadata["split_version"] = "v1"
+        r2 = make_dummy_report(seed=2)
+        r2.run_metadata["split_version"] = "v1"
+        r3 = make_dummy_report(seed=3)
+        r3.run_metadata["split_version"] = "v2"
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("split_version" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_sample_counts_marks_preliminary_with_warning(self):
+        # 3 runs with matching split names and versions, but disparate sample counts:
+        # seed 1 -> 2 samples, seed 2 -> 2 samples, seed 3 -> 4 samples
+        res_2 = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        res_4 = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 2, "fp": 0, "tn": 2, "fn": 0}
+        )
+
+        r1 = EvaluationReport(overall=res_2, by_split={"test": res_2}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 1, "evaluated_samples": 2}, seed=1)
+        r2 = EvaluationReport(overall=res_2, by_split={"test": res_2}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 2, "evaluated_samples": 2}, seed=2)
+        r3 = EvaluationReport(overall=res_4, by_split={"test": res_4}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 3, "evaluated_samples": 4}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        # Invariant: A benchmark CANNOT be sealed if runs evaluated disparate cohorts / sample counts!
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("sample count" in w.lower() or "cohort" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_sample_set_hash_marks_preliminary_with_warning(self):
+        res_2 = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res_2, by_split={"test": res_2}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 1, "sample_set_hash": "hash_aaa"}, seed=1)
+        r2 = EvaluationReport(overall=res_2, by_split={"test": res_2}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 2, "sample_set_hash": "hash_aaa"}, seed=2)
+        r3 = EvaluationReport(overall=res_2, by_split={"test": res_2}, by_generator={}, threshold_metadata={"threshold": 0.5}, run_metadata={"seed": 3, "sample_set_hash": "hash_bbb"}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("sample_set_hash" in w.lower() or "cohort" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_missing_cohort_hash_marks_preliminary_with_warning(self):
+        # 3 runs, but seed 3 lacks sample_set_hash (legacy/malformed report)
+        res = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 1, "sample_set_hash": "same_hash"}, seed=1)
+        r2 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 2, "sample_set_hash": "same_hash"}, seed=2)
+        r3 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 3}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        # Invariant: Cohort identity MUST be mandatory; lack of verified hash prevents sealing
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("cannot be proven" in w.lower() or "sample_set_hash" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_threshold_strategy_marks_preliminary_with_warning(self):
+        # 3 runs on same test cohort, but different threshold strategies:
+        # seed 11 -> f1, seed 12 -> accuracy, seed 13 -> youden
+        res = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1"}, run_metadata={"seed": 11, "sample_set_hash": "same_hash"}, seed=11)
+        r2 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "accuracy"}, run_metadata={"seed": 12, "sample_set_hash": "same_hash"}, seed=12)
+        r3 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "youden"}, run_metadata={"seed": 13, "sample_set_hash": "same_hash"}, seed=13)
+
+        agg = aggregate_reports([r1, r2, r3])
+        # Invariant: Disparate threshold strategies cannot be aggregated into a sealed baseline!
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("threshold strateg" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_val_cohort_hash_marks_preliminary_with_warning(self):
+        # 3 calibrated runs on same test cohort, but different validation cohorts
+        res = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="val_optimal_f1", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True, "val_cohort_hash": "val_cohort_a"}, run_metadata={"seed": 1, "sample_set_hash": "same_hash"}, seed=1)
+        r2 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True, "val_cohort_hash": "val_cohort_a"}, run_metadata={"seed": 2, "sample_set_hash": "same_hash"}, seed=2)
+        r3 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True, "val_cohort_hash": "val_cohort_b"}, run_metadata={"seed": 3, "sample_set_hash": "same_hash"}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        # Invariant: Disparate validation cohorts mean thresholds were calibrated on different distributions!
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("val_cohort_hash" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_missing_val_cohort_hash_in_calibrated_run_marks_preliminary_with_warning(self):
+        res = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="val_optimal_f1", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True, "val_cohort_hash": "val_cohort_a"}, run_metadata={"seed": 1, "sample_set_hash": "same_hash"}, seed=1)
+        r2 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True, "val_cohort_hash": "val_cohort_a"}, run_metadata={"seed": 2, "sample_set_hash": "same_hash"}, seed=2)
+        r3 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "f1", "calibrated": True}, run_metadata={"seed": 3, "sample_set_hash": "same_hash"}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("val_cohort_hash" in w.lower() or "validation cohort" in w.lower() for w in agg.metadata["aggregation_warnings"])
+
+    def test_mismatched_model_architecture_marks_preliminary_with_warning(self):
+        # 3 runs with matching cohorts, but disparate model architectures
+        res = MetricResult(
+            auroc=1.0, accuracy=1.0, f1=1.0, precision=1.0, recall=1.0, threshold=0.5,
+            threshold_source="default", confusion_matrix={"tp": 1, "fp": 0, "tn": 1, "fn": 0}
+        )
+        r1 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 1, "sample_set_hash": "same_hash", "model_name": "SemanticOnly"}, seed=1)
+        r2 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 2, "sample_set_hash": "same_hash", "model_name": "ForensicOnly"}, seed=2)
+        r3 = EvaluationReport(overall=res, by_split={"test": res}, by_generator={}, threshold_metadata={"threshold": 0.5, "strategy": "default"}, run_metadata={"seed": 3, "sample_set_hash": "same_hash", "model_name": "FusionDetector"}, seed=3)
+
+        agg = aggregate_reports([r1, r2, r3])
+        assert agg.is_preliminary is True
+        assert "aggregation_warnings" in agg.metadata
+        assert any("model" in w.lower() or "architecture" in w.lower() for w in agg.metadata["aggregation_warnings"])

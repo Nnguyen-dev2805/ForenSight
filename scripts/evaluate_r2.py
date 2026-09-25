@@ -186,18 +186,19 @@ def main() -> int:
             split_version=args.split_version,
             config=config,
             threshold_source=report.threshold_metadata["threshold_source"],
-            threshold_value=report.threshold_metadata["threshold_value"],
+            threshold_value=report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"]),
             metrics=report.to_dict(),
             seed=config.get("seed"),
         )
         repro.save_json(repro_path)
         print(f"Saved reproducibility record to {repro_path}")
 
+    thresh_val = report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"])
     print("\n--- Evaluation Summary ---")
     print(f"Overall AUROC:    {report.overall.auroc}")
     print(f"Overall Accuracy: {report.overall.accuracy:.4f}")
     print(f"Overall F1:       {report.overall.f1:.4f}")
-    print(f"Threshold:        {report.threshold_metadata['threshold_value']:.4f} ({report.threshold_metadata['threshold_source']})")
+    print(f"Threshold:        {thresh_val:.4f} ({report.threshold_metadata['threshold_source']})")
     return 0
 
 

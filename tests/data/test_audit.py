@@ -257,6 +257,23 @@ class TestAuditLeakage:
         expected_path = str(tmp_path / "images/t1.jpg")
         assert expected_path in res["image_path_collisions"][0]["colliding_paths"]
 
+    def test_cross_eval_split_leakage_detected(self):
+        train = Manifest([
+            ManifestRecord(sample_id="t1", image_path="/t1.jpg", label=1, dataset="g", generator="sd14", split="train"),
+        ])
+        val_m = Manifest([
+            ManifestRecord(sample_id="shared_eval_id", image_path="/val_path.jpg", label=1, dataset="g", generator="sd14", split="val"),
+        ])
+        test_m = Manifest([
+            ManifestRecord(sample_id="shared_eval_id", image_path="/val_path.jpg", label=1, dataset="g", generator="sd14", split="test"),
+        ])
+        # train has no overlap with val or test, but val and test share sample_id and path
+        res = audit_manifest_leakage(train, {"val": val_m, "test": test_m})
+        assert res["has_leakage"] is True
+        assert len(res["sample_id_collisions"]) >= 1
+        assert any("val" in v and "test" in v for v in res["violations"])
+
+
 
 class TestAuditManifestImages:
     """Integration unit tests for audit_manifest_images and literature confound detection."""

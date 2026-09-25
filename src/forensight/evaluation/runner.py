@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
@@ -701,15 +702,26 @@ def evaluate_predictions(
         tau_star = float(default_threshold)
         threshold_source = f"default_{default_threshold}"
 
+    val_cohort_hash: str | None = None
+    if val_set is not None and len(val_set) > 0:
+        val_tuples = sorted(
+            f"{r.sample_id}:{r.label}:{r.split}:{r.generator}:{r.dataset}"
+            for r in val_set
+        )
+        val_cohort_hash = hashlib.sha256("\n".join(val_tuples).encode("utf-8")).hexdigest()[:16]
+
     threshold_metadata: dict[str, Any] = {
         "threshold": float(tau_star),
+        "threshold_value": float(tau_star),
         "strategy": strat if calibrated else "default",
+        "threshold_strategy": strat if calibrated else "default",
         "threshold_source": threshold_source,
         "calibrated": calibrated,
         "val_split_name": val_split_name if (calibrated and val_predictions is None) else (
             "separate_val_predictions" if calibrated else None
         ),
         "val_samples_count": val_samples_count,
+        "val_cohort_hash": val_cohort_hash,
         "default_threshold": float(default_threshold),
         "invariant_preserved": True,
     }
@@ -718,11 +730,17 @@ def evaluate_predictions(
     # Protocol rule: Test/benchmark overall metrics MUST NOT evaluate on validation or train samples
     # if partitions are present.
     excluded_splits = {"train", "training"}
-    if val_predictions is None and val_split_name in predictions.splits:
+    if val_split_name:
         excluded_splits.add(val_split_name)
+    excluded_splits.update({"val", "validation", "valid"})
 
     if eval_splits is not None:
         target_splits = set(eval_splits)
+        disallowed = target_splits & excluded_splits
+        if disallowed:
+            raise ValueError(
+                f"eval_splits cannot include training or validation splits: {sorted(list(disallowed))}"
+            )
         overall_records = predictions.filter(lambda r: r.split in target_splits)
         if len(overall_records) == 0:
             raise ValueError(f"No samples found for specified eval_splits: {eval_splits}")
@@ -730,7 +748,11 @@ def evaluate_predictions(
         candidate_records = predictions.filter(
             lambda r: r.split is None or r.split not in excluded_splits
         )
-        overall_records = candidate_records if len(candidate_records) > 0 else predictions
+        if len(candidate_records) == 0:
+            raise ValueError(
+                f"No evaluation records found after excluding training and validation splits {sorted(list(excluded_splits))}."
+            )
+        overall_records = candidate_records
 
     # 4. Compute overall benchmark metrics
     overall_result = compute_metrics(
@@ -752,11 +774,30 @@ def evaluate_predictions(
                 threshold_source=threshold_source,
             )
 
-    # 6. Compute per-generator metrics
+    # 6. Compute per-generator metrics within evaluation scope
+    # Protocol rule: Generator slicing must strictly operate within the evaluation scope (overall_records),
+    # preventing validation and training samples from contaminating per-generator benchmark metrics.
+    eval_reals = [r for r in overall_records if r.label == 0]
+
     by_generator: dict[str, MetricResult] = {}
-    for g in sorted(predictions.generators):
-        sub_gen = predictions.get_generator(g)
-        if len(sub_gen) > 0:
+    for g in sorted(overall_records.generators):
+        sub_gen = overall_records.get_generator(g)
+        if len(sub_gen) == 0:
+            continue
+
+        unique_labels = set(sub_gen.y_true)
+        if len(unique_labels) == 1 and 1 in unique_labels and eval_reals:
+            # Synthetic generator with only fake images: combine with reference reals from evaluation scope
+            paired_records = list(sub_gen) + eval_reals
+            gen_y_true = np.array([r.label for r in paired_records], dtype=int)
+            gen_y_scores = np.array([r.score for r in paired_records], dtype=np.float64)
+            by_generator[g] = compute_metrics(
+                gen_y_true,
+                gen_y_scores,
+                threshold=tau_star,
+                threshold_source=threshold_source,
+            )
+        else:
             by_generator[g] = compute_metrics(
                 sub_gen.y_true,
                 sub_gen.y_scores,
@@ -764,10 +805,10 @@ def evaluate_predictions(
                 threshold_source=threshold_source,
             )
 
-    # 7. Compute per-dataset metrics
+    # 7. Compute per-dataset metrics within evaluation scope
     by_dataset: dict[str, MetricResult] = {}
-    for d in sorted(predictions.datasets):
-        sub_ds = predictions.get_dataset(d)
+    for d in sorted(overall_records.datasets):
+        sub_ds = overall_records.get_dataset(d)
         if len(sub_ds) > 0:
             by_dataset[d] = compute_metrics(
                 sub_ds.y_true,
@@ -781,14 +822,24 @@ def evaluate_predictions(
     if seed_val is None and run_metadata:
         seed_val = run_metadata.get("seed")
 
+    eval_tuples = sorted(
+        f"{r.sample_id}:{r.label}:{r.split}:{r.generator}:{r.dataset}"
+        for r in overall_records
+    )
+    sample_set_hash = hashlib.sha256("\n".join(eval_tuples).encode("utf-8")).hexdigest()[:16]
+
     run_meta: dict[str, Any] = {
         "run_name": (run_metadata.get("run_name") if run_metadata else None) or "evaluation_run",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "total_samples": len(predictions),
         "evaluated_samples": len(overall_records),
+        "sample_set_hash": sample_set_hash,
+        "cohort_hash": sample_set_hash,
+        "test_cohort_hash": sample_set_hash,
+        "val_cohort_hash": val_cohort_hash,
         "splits": sorted(list(predictions.splits)),
-        "generators": sorted(list(predictions.generators)),
-        "datasets": sorted(list(predictions.datasets)),
+        "generators": sorted(list(overall_records.generators)),
+        "datasets": sorted(list(overall_records.datasets)),
     }
     if seed_val is not None:
         run_meta["seed"] = seed_val

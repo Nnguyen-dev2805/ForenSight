@@ -382,6 +382,10 @@ class AggregatedEvaluationReport:
                 "- **Benchmark Status:** ⚠️ **PRELIMINARY RESULT** "
                 f"(N = {self.num_runs} < 3; insufficient seeds to seal baseline per evaluation protocol)"
             )
+            warnings = self.metadata.get("aggregation_warnings")
+            if warnings:
+                for w in warnings:
+                    lines.append(f"  - ⚠️ *Warning:* {w}")
         else:
             lines.append(
                 "- **Benchmark Status:** ✅ **SEALED BENCHMARK** "
@@ -510,6 +514,16 @@ def aggregate_reports(
 
     # 1. Collect seeds and run identifiers
     seeds: list[int | str] = []
+    aggregation_warnings: list[str] = []
+    split_versions: set[str] = set()
+    split_sets: list[set[str]] = []
+    sample_set_hashes: list[str | None] = []
+    val_cohort_hashes: list[tuple[bool, str | None]] = []
+    threshold_strategies: list[str | None] = []
+    model_names: list[str | None] = []
+    experiment_names: list[str | None] = []
+    overall_sample_counts: list[int] = []
+
     for idx, r in enumerate(reports):
         seed_val = getattr(r, "seed", None)
         if seed_val is None and hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
@@ -518,16 +532,162 @@ def aggregate_reports(
             seed_val = f"run_{idx}"
         seeds.append(seed_val)
 
+        sv = None
+        if hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
+            sv = r.run_metadata.get("split_version")
+        if sv:
+            split_versions.add(str(sv))
+
+        split_sets.append(set(r.by_split.keys()))
+
+        # Extract cohort / sample set hash
+        cohort_h = None
+        if hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
+            cohort_h = (
+                r.run_metadata.get("sample_set_hash")
+                or r.run_metadata.get("cohort_hash")
+                or r.run_metadata.get("test_cohort_hash")
+            )
+        sample_set_hashes.append(cohort_h)
+
+        # Extract val_cohort_hash and calibration status
+        calibrated = False
+        val_h = None
+        if hasattr(r, "threshold_metadata") and isinstance(r.threshold_metadata, dict):
+            calibrated = bool(r.threshold_metadata.get("calibrated", False))
+            val_h = r.threshold_metadata.get("val_cohort_hash")
+        if val_h is None and hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
+            val_h = r.run_metadata.get("val_cohort_hash")
+        val_cohort_hashes.append((calibrated, val_h))
+
+        # Extract threshold strategy
+        strat = None
+        if hasattr(r, "threshold_metadata") and isinstance(r.threshold_metadata, dict):
+            strat = r.threshold_metadata.get("strategy") or r.threshold_metadata.get("threshold_strategy")
+        threshold_strategies.append(strat)
+
+        # Extract model / architecture name
+        m_name = None
+        if hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
+            m_name = (
+                r.run_metadata.get("model_name")
+                or r.run_metadata.get("model")
+                or r.run_metadata.get("architecture")
+            )
+        model_names.append(m_name)
+
+        # Extract experiment name
+        exp_name = None
+        if hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict):
+            exp_name = r.run_metadata.get("experiment_name")
+        experiment_names.append(exp_name)
+
+        # Extract overall evaluated sample count
+        cm = r.overall.confusion_matrix if hasattr(r.overall, "confusion_matrix") else {}
+        cm_total = cm.get("tp", 0) + cm.get("fp", 0) + cm.get("tn", 0) + cm.get("fn", 0)
+        if cm_total > 0:
+            overall_n = cm_total
+        elif hasattr(r, "run_metadata") and isinstance(r.run_metadata, dict) and "evaluated_samples" in r.run_metadata:
+            overall_n = int(r.run_metadata["evaluated_samples"])
+        else:
+            overall_n = 0
+        overall_sample_counts.append(overall_n)
+
     num_runs = len(reports)
     # A run requires at least 3 distinct, tracked seeds to be a sealed benchmark
     tracked_unique_seeds = {s for s in seeds if not str(s).startswith("run_")}
     is_preliminary = len(tracked_unique_seeds) < 3 or num_runs < 3
 
+    # 1. Cohort and split version consistency checks
+    if len(split_versions) > 1:
+        aggregation_warnings.append(
+            f"Mismatched split_version across runs: {sorted(list(split_versions))}."
+        )
+        is_preliminary = True
+
+    # 2. Evaluated split names consistency
+    if any(s != split_sets[0] for s in split_sets[1:]):
+        aggregation_warnings.append(
+            "Mismatched evaluated splits across runs; reports evaluate disparate partitions."
+        )
+        is_preliminary = True
+
+    # 3. Test cohort identity checks (MANDATORY: all runs must have verified identical sample_set_hash)
+    if any(h is None or not str(h).strip() for h in sample_set_hashes):
+        aggregation_warnings.append(
+            "One or more reports lack a verified sample_set_hash; cohort identity cannot be proven."
+        )
+        is_preliminary = True
+    elif len(set(sample_set_hashes)) > 1:
+        aggregation_warnings.append(
+            f"Mismatched sample_set_hash / cohort across runs: {sorted(list(set(str(h) for h in sample_set_hashes)))}. Evaluated cohorts differ."
+        )
+        is_preliminary = True
+
+    # 4. Validation cohort identity checks (for calibrated runs)
+    calibrated_pairs = [pair for pair in val_cohort_hashes if pair[0]]
+    if calibrated_pairs:
+        if any(h is None or not str(h).strip() for _, h in calibrated_pairs):
+            aggregation_warnings.append(
+                "One or more calibrated reports lack a verified val_cohort_hash; validation cohort identity cannot be proven."
+            )
+            is_preliminary = True
+        elif len(set(h for _, h in calibrated_pairs)) > 1:
+            aggregation_warnings.append(
+                f"Mismatched val_cohort_hash across runs: {sorted(list(set(str(h) for _, h in calibrated_pairs)))}. Thresholds were calibrated on different validation cohorts."
+            )
+            is_preliminary = True
+
+    # 5. Threshold strategy consistency
+    unique_strats = {str(s) for s in threshold_strategies if s is not None}
+    if any(s is None for s in threshold_strategies) or len(unique_strats) > 1:
+        aggregation_warnings.append(
+            f"Mismatched threshold strategies across runs: {sorted(list(unique_strats))}. All runs must use the identical threshold calibration protocol."
+        )
+        is_preliminary = True
+
+    # 6. Model/Architecture consistency
+    valid_models = {str(m) for m in model_names if m is not None}
+    if len(valid_models) > 1:
+        aggregation_warnings.append(
+            f"Mismatched model/architecture across runs: {sorted(list(valid_models))}. Disparate models cannot be aggregated into a single sealed baseline."
+        )
+        is_preliminary = True
+
+    # 7. Experiment name consistency
+    valid_exps = {str(e) for e in experiment_names if e is not None}
+    if len(valid_exps) > 1:
+        aggregation_warnings.append(
+            f"Mismatched experiment_name across runs: {sorted(list(valid_exps))}. Different experiments cannot be aggregated into a single sealed baseline."
+        )
+        is_preliminary = True
+
+    # 8. Overall sample count consistency
+    if len(set(overall_sample_counts)) > 1:
+        aggregation_warnings.append(
+            f"Mismatched overall sample counts across runs: {overall_sample_counts}. Reports must evaluate the same cohort to seal benchmark."
+        )
+        is_preliminary = True
+
+    # 9. Per-split sample count consistency
+    split_keys = sorted(set().union(*(r.by_split.keys() for r in reports)))
+    for s_name in split_keys:
+        split_counts = []
+        for r in reports:
+            if s_name in r.by_split:
+                cm = r.by_split[s_name].confusion_matrix if hasattr(r.by_split[s_name], "confusion_matrix") else {}
+                n = cm.get("tp", 0) + cm.get("fp", 0) + cm.get("tn", 0) + cm.get("fn", 0)
+                split_counts.append(n)
+        if len(set(split_counts)) > 1:
+            aggregation_warnings.append(
+                f"Mismatched sample counts for split '{s_name}' across runs: {split_counts}. Evaluated cohorts differ."
+            )
+            is_preliminary = True
+
     # 2. Overall benchmark aggregation
     overall = AggregatedSlice.from_metric_results([r.overall for r in reports])
 
     # 3. Per-split aggregation
-    split_keys = sorted(set().union(*(r.by_split.keys() for r in reports)))
     by_split: dict[str, AggregatedSlice] = {}
     for k in split_keys:
         split_results = [r.by_split[k] for r in reports if k in r.by_split]
@@ -564,6 +724,8 @@ def aggregate_reports(
         "seeds": seeds,
         "is_preliminary": is_preliminary,
     }
+    if aggregation_warnings:
+        meta["aggregation_warnings"] = aggregation_warnings
     if metadata:
         meta.update(metadata)
 

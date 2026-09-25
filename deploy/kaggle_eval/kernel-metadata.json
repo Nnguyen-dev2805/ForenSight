@@ -1,0 +1,17 @@
+{
+  "id": "truongnhatnguyen2805/forensight-r2-eval-threshold-0-5",
+  "title": "ForenSight R2 Eval Threshold 0.5",
+  "code_file": "main.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "truongnhatnguyen2805/forensight-r2-fusion-training"
+  ],
+  "model_sources": []
+}

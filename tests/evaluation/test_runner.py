@@ -449,13 +449,20 @@ class TestEvaluatePredictions:
         assert report.overall.accuracy == 1.0
 
     def test_single_class_generator_slice_handling(self, benchmark_predictions):
-        # Generator 'midjourney' has only fake samples (class 1)
+        # Generator 'midjourney' has fake samples; when paired with reference reals, AUROC is valid
         report = evaluate_predictions(benchmark_predictions, val_split_name="val")
         mj_metrics = report.by_generator["midjourney"]
-        # AUROC should be None (undefined on 1 class), but secondary metrics computed without error
-        assert mj_metrics.auroc is None
+        assert mj_metrics.auroc == 1.0
         assert mj_metrics.accuracy == 1.0
         assert mj_metrics.recall == 1.0
+
+        # When no reference reals exist in the set, AUROC falls back to None gracefully
+        pure_fake_pset = PredictionSet([
+            PredictionRecord("f1", 1, 0.8, generator="only_fakes"),
+            PredictionRecord("f2", 1, 0.9, generator="only_fakes"),
+        ])
+        pure_fake_rep = evaluate_predictions(pure_fake_pset)
+        assert pure_fake_rep.by_generator["only_fakes"].auroc is None
 
     def test_empty_predictions_raises(self):
         with pytest.raises(ValueError, match="Cannot evaluate empty PredictionSet"):
@@ -624,3 +631,142 @@ class TestCLI:
         res = subprocess.run(cmd, capture_output=True, text=True)
         assert res.returncode == 0
         assert out_json.exists()
+
+
+class TestThresholdAndPartitionInvariants:
+    """Tests ensuring threshold metadata alias and strict partition leakage prevention."""
+
+    def test_threshold_metadata_has_threshold_value_alias(self):
+        records = [
+            PredictionRecord("v1", 0, 0.1, split="val"),
+            PredictionRecord("v2", 1, 0.9, split="val"),
+            PredictionRecord("t1", 0, 0.2, split="test"),
+            PredictionRecord("t2", 1, 0.8, split="test"),
+        ]
+        report = evaluate_predictions(PredictionSet(records), val_split_name="val")
+        assert "threshold" in report.threshold_metadata
+        assert "threshold_value" in report.threshold_metadata
+        assert report.threshold_metadata["threshold_value"] == report.threshold_metadata["threshold"]
+
+    def test_evaluate_predictions_excludes_val_split_even_when_separate_val_predictions_passed(self):
+        # Separate val set
+        sep_val = PredictionSet([
+            PredictionRecord("sv1", 0, 0.1),
+            PredictionRecord("sv2", 1, 0.9),
+        ])
+        # Main predictions containing both val and test records
+        main_records = [
+            PredictionRecord("v1", 0, 0.15, split="val"),
+            PredictionRecord("v2", 1, 0.85, split="val"),
+            PredictionRecord("t1", 0, 0.2, split="test"),
+            PredictionRecord("t2", 1, 0.8, split="test"),
+        ]
+        report = evaluate_predictions(
+            PredictionSet(main_records),
+            val_predictions=sep_val,
+            val_split_name="val",
+        )
+        # Invariant: Overall benchmark must ONLY evaluate on test partition (2 samples),
+        # the validation partition inside main_records must NOT leak into overall!
+        cm = report.overall.confusion_matrix
+        assert cm["tp"] + cm["fp"] + cm["tn"] + cm["fn"] == 2
+        assert "test" in report.by_split
+
+    def test_per_generator_auroc_with_nature_reals(self):
+        records = [
+            PredictionRecord("v1", 0, 0.1, split="val", generator="nature"),
+            PredictionRecord("v2", 1, 0.9, split="val", generator="sd14"),
+            # Evaluation partition: real images have generator="nature", fakes have generator="midjourney"
+            PredictionRecord("r1", 0, 0.1, split="test", generator="nature"),
+            PredictionRecord("r2", 0, 0.3, split="test", generator="nature"),
+            PredictionRecord("f1", 1, 0.7, split="test", generator="midjourney"),
+            PredictionRecord("f2", 1, 0.9, split="test", generator="midjourney"),
+        ]
+        report = evaluate_predictions(PredictionSet(records), val_split_name="val")
+        assert "midjourney" in report.by_generator
+        mj_result = report.by_generator["midjourney"]
+        # Invariant: AUROC must be calculated properly (not None) by pairing fake generator with reference reals
+        assert mj_result.auroc is not None
+        assert 0.0 <= mj_result.auroc <= 1.0
+        assert mj_result.auroc == 1.0
+
+    def test_eval_splits_rejects_train_and_val_splits(self):
+        records = [
+            PredictionRecord("v1", 0, 0.1, split="val"),
+            PredictionRecord("v2", 1, 0.9, split="val"),
+            PredictionRecord("t1", 0, 0.2, split="test"),
+            PredictionRecord("t2", 1, 0.8, split="test"),
+        ]
+        pset = PredictionSet(records)
+
+        # Invariant: eval_splits cannot target validation or training splits
+        with pytest.raises(ValueError, match="cannot include training or validation splits"):
+            evaluate_predictions(pset, eval_splits=["val"])
+
+        with pytest.raises(ValueError, match="cannot include training or validation splits"):
+            evaluate_predictions(pset, eval_splits=["train"])
+
+        # When predictions only contain validation records, evaluate_predictions must not fall back to val
+        val_only_pset = PredictionSet([
+            PredictionRecord("v1", 0, 0.1, split="val"),
+            PredictionRecord("v2", 1, 0.9, split="val"),
+        ])
+        with pytest.raises(ValueError, match="No evaluation records found"):
+            evaluate_predictions(val_only_pset, val_split_name="val")
+
+    def test_by_generator_isolated_to_evaluation_scope_no_val_leakage(self):
+        records = [
+            # Validation partition
+            PredictionRecord("v_real", 0, 0.1, split="val", generator="nature"),
+            PredictionRecord("v_fake", 1, 0.9, split="val", generator="sd14"),
+            # Test partition
+            PredictionRecord("t_real", 0, 0.2, split="test", generator="nature"),
+            PredictionRecord("t_fake", 1, 0.85, split="test", generator="sd14"),
+        ]
+        pset = PredictionSet(records)
+        report = evaluate_predictions(pset, val_split_name="val")
+
+        # Invariant 1: Overall benchmark evaluated samples must be exactly 2 (the test samples)
+        assert report.run_metadata["evaluated_samples"] == 2
+        cm_ov = report.overall.confusion_matrix
+        assert cm_ov["tp"] + cm_ov["fp"] + cm_ov["tn"] + cm_ov["fn"] == 2
+
+        # Invariant 2: by_generator must strictly slice within evaluation scope (test samples only).
+        # sd14 slice must have 1 test fake paired with 1 test real = 2 samples, NOT 3 or 4 (val fake must NOT leak)!
+        assert "sd14" in report.by_generator
+        cm_sd14 = report.by_generator["sd14"].confusion_matrix
+        assert cm_sd14["tp"] + cm_sd14["fp"] + cm_sd14["tn"] + cm_sd14["fn"] == 2
+        assert cm_sd14["tp"] == 1  # 1 test fake detected
+        assert cm_sd14["tn"] == 1  # 1 test real detected
+
+    def test_sample_set_hash_encodes_canonical_tuples(self):
+        # Two sets with identical sample_ids, but different ground-truth labels
+        pset1 = PredictionSet([
+            PredictionRecord("s1", 0, 0.2, split="test", generator="nature", dataset="d"),
+            PredictionRecord("s2", 1, 0.8, split="test", generator="sd14", dataset="d"),
+        ])
+        pset2 = PredictionSet([
+            PredictionRecord("s1", 1, 0.2, split="test", generator="sd14", dataset="d"),
+            PredictionRecord("s2", 0, 0.8, split="test", generator="nature", dataset="d"),
+        ])
+        rep1 = evaluate_predictions(pset1, default_threshold=0.5)
+        rep2 = evaluate_predictions(pset2, default_threshold=0.5)
+
+        # Invariant: Canonical tuple hash must encode (sample_id, label, split, generator, dataset)
+        assert rep1.run_metadata["sample_set_hash"] != rep2.run_metadata["sample_set_hash"]
+
+    def test_val_cohort_hash_generated_on_calibrated_run(self):
+        records = [
+            PredictionRecord("v1", 0, 0.1, split="val", generator="nature", dataset="g"),
+            PredictionRecord("v2", 1, 0.9, split="val", generator="sd14", dataset="g"),
+            PredictionRecord("t1", 0, 0.2, split="test", generator="nature", dataset="g"),
+            PredictionRecord("t2", 1, 0.8, split="test", generator="sd14", dataset="g"),
+        ]
+        pset = PredictionSet(records)
+        report = evaluate_predictions(pset, val_split_name="val", threshold_strategy="f1")
+
+        assert "val_cohort_hash" in report.threshold_metadata
+        val_hash = report.threshold_metadata["val_cohort_hash"]
+        assert val_hash is not None
+        assert len(val_hash) == 16
+        assert report.run_metadata["val_cohort_hash"] == val_hash
