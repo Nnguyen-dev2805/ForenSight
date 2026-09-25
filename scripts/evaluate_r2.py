@@ -10,6 +10,7 @@ on validation data and frozen when scoring test sets.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,12 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Path to validation manifest (JSONL/CSV) for threshold calibration.",
     )
     parser.add_argument(
+        "--train-manifest",
+        type=str,
+        default=None,
+        help="Optional path to training manifest (JSONL/CSV) to verify train ↔ test and train ↔ val leakage.",
+    )
+    parser.add_argument(
         "--eval-manifest",
         type=str,
         nargs="+",
@@ -62,6 +69,24 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         help="Base directory for resolving relative image paths.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to automatically save all run artifacts (predictions, evaluation, reproducibility, manifests).",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="Tiny-GenImage",
+        help="Name of dataset evaluated (default: Tiny-GenImage).",
+    )
+    parser.add_argument(
+        "--dataset-revision",
+        type=str,
+        default="hf:TheKernel01/Tiny-GenImage@v1.0",
+        help="Dataset revision or commit SHA for exact provenance tracking.",
     )
     parser.add_argument(
         "--predictions-out",
@@ -150,13 +175,19 @@ def main() -> int:
         all_records.extend(pset.records)
     combined = PredictionSet(all_records)
 
-    if args.predictions_out:
-        out_path = Path(args.predictions_out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_jsonl(out_path)
-        print(f"Saved {len(combined)} prediction records to {out_path}")
+    out_dir = Path(args.output_dir) if args.output_dir else None
+    if out_dir:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if not args.predictions_out:
+            args.predictions_out = str(out_dir / "predictions.jsonl")
+        if not args.report_json:
+            args.report_json = str(out_dir / "evaluation.json")
+        if not args.report_md:
+            args.report_md = str(out_dir / "evaluation.md")
+        if not args.repro_json:
+            args.repro_json = str(out_dir / "reproducibility.json")
 
-    # Evaluate using the leak-free R0 runner
+    # Evaluate using the leak-free R0 runner (must run before saving predictions to calibrate tau_star)
     threshold_strategy = config.get("evaluation", {}).get("threshold_strategy", "f1")
     print(f"Running leak-free evaluation (val calibration strategy='{threshold_strategy}')...")
     report = evaluate_predictions(
@@ -165,6 +196,12 @@ def main() -> int:
         threshold_strategy=threshold_strategy,
         seed=config.get("seed"),
     )
+
+    if args.predictions_out:
+        out_path = Path(args.predictions_out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        combined.to_jsonl(out_path)
+        print(f"Saved {len(combined)} prediction records to {out_path}")
 
     if args.report_json:
         report_json_path = Path(args.report_json)
@@ -185,6 +222,8 @@ def main() -> int:
             experiment_name=f"r2_{variant}",
             split_version=args.split_version,
             config=config,
+            dataset=args.dataset,
+            dataset_revision=args.dataset_revision,
             threshold_source=report.threshold_metadata["threshold_source"],
             threshold_value=report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"]),
             metrics=report.to_dict(),
@@ -192,6 +231,67 @@ def main() -> int:
         )
         repro.save_json(repro_path)
         print(f"Saved reproducibility record to {repro_path}")
+
+    if out_dir:
+        from forensight.data.audit import audit_manifest_leakage
+        from forensight.data.split import Manifest
+
+        # 1. Resolve train manifest if available (from CLI or pre-existing in out_dir from train_r2.py)
+        train_m = None
+        train_path = None
+        if args.train_manifest and Path(args.train_manifest).exists():
+            train_path = Path(args.train_manifest)
+        elif (out_dir / "train_manifest.jsonl").exists():
+            train_path = out_dir / "train_manifest.jsonl"
+
+        if train_path is not None:
+            train_m = load_manifest_file(train_path)
+
+        # 2. Persist val and combined test manifests into out_dir
+        val_m = load_manifest_file(args.val_manifest)
+        val_m.to_jsonl(out_dir / "val_manifest.jsonl")
+
+        all_eval_records = []
+        eval_m_dict = {}
+        for p in args.eval_manifest:
+            m = load_manifest_file(p)
+            eval_m_dict[Path(p).stem] = m
+            all_eval_records.extend(m.records)
+
+        combined_test_m = Manifest(all_eval_records)
+        combined_test_m.to_jsonl(out_dir / "test_manifest.jsonl")
+
+        # 3. Comprehensive pairwise leakage audit across train, val, and all test partitions
+        eval_splits_to_check = dict(eval_m_dict)
+        eval_splits_to_check["val"] = val_m
+
+        if train_m is not None:
+            leakage_check = audit_manifest_leakage(train_m, eval_splits_to_check)
+        else:
+            leakage_check = audit_manifest_leakage(val_m, eval_m_dict)
+
+        audit_data: dict[str, Any] = {
+            "val_samples": len(val_m),
+            "test_samples": len(combined_test_m),
+            "val_reals": len(val_m.filter(label=0)),
+            "val_fakes": len(val_m.filter(label=1)),
+            "test_reals": len(combined_test_m.filter(label=0)),
+            "test_fakes": len(combined_test_m.filter(label=1)),
+            "val_generators": sorted(list({r.generator for r in val_m if r.generator})),
+            "test_generators": sorted(list({r.generator for r in combined_test_m if r.generator})),
+            "leakage": leakage_check,
+        }
+
+        if train_m is not None:
+            audit_data["train_samples"] = len(train_m)
+            audit_data["train_reals"] = len(train_m.filter(label=0))
+            audit_data["train_fakes"] = len(train_m.filter(label=1))
+            audit_data["train_generators"] = sorted(list({r.generator for r in train_m if r.generator}))
+
+        audit_path = out_dir / "dataset_audit.json"
+        with audit_path.open("w", encoding="utf-8") as f:
+            json.dump(audit_data, f, indent=2)
+        print(f"Saved complete unified dataset audit and manifests to {out_dir}")
 
     thresh_val = report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"])
     print("\n--- Evaluation Summary ---")

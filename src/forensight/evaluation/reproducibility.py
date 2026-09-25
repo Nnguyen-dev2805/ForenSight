@@ -153,9 +153,15 @@ class ReproducibilityRecord:
     metrics: dict[str, Any]
     environment: dict[str, Any]
     notes: str = ""
+    dataset: str = "Tiny-GenImage"
+    dataset_revision: str | None = None
 
-    def validate(self) -> list[str]:
+    def validate(self, require_provenance: bool = False) -> list[str]:
         """Validate presence, types, and invariants of all required fields.
+
+        Args:
+            require_provenance: If True, enforce that git_commit and dataset_revision
+                are non-empty strings for strict reproducibility tracking.
 
         Returns:
             List of validation error strings. Returns an empty list if all invariants pass.
@@ -228,8 +234,10 @@ class ReproducibilityRecord:
             elif isinstance(self.seed, str) and not self.seed.strip():
                 errors.append("seed cannot be an empty string if specified.")
 
-        # 11. git_commit: str or None
-        if self.git_commit is not None:
+        # 11. git_commit: str or None (mandatory if require_provenance=True)
+        if require_provenance and (self.git_commit is None or not str(self.git_commit).strip()):
+            errors.append("git_commit must be a non-empty string for strict reproducibility provenance.")
+        elif self.git_commit is not None:
             if not isinstance(self.git_commit, str):
                 errors.append(
                     f"git_commit must be a string or None, got: {type(self.git_commit).__name__}"
@@ -237,7 +245,22 @@ class ReproducibilityRecord:
             elif not self.git_commit.strip():
                 errors.append("git_commit cannot be an empty string if specified.")
 
-        # 12. notes: str
+        # 12. dataset: non-empty string
+        if not isinstance(self.dataset, str) or not self.dataset.strip():
+            errors.append("dataset must be a non-empty string.")
+
+        # 13. dataset_revision: str or None (mandatory if require_provenance=True)
+        if require_provenance and (self.dataset_revision is None or not str(self.dataset_revision).strip()):
+            errors.append("dataset_revision must be a non-empty string for strict reproducibility provenance.")
+        elif self.dataset_revision is not None:
+            if not isinstance(self.dataset_revision, str):
+                errors.append(
+                    f"dataset_revision must be a string or None, got: {type(self.dataset_revision).__name__}"
+                )
+            elif not self.dataset_revision.strip():
+                errors.append("dataset_revision cannot be an empty string if specified.")
+
+        # 14. notes: str
         if not isinstance(self.notes, str):
             errors.append(f"notes must be a string, got: {type(self.notes).__name__}")
 
@@ -248,9 +271,9 @@ class ReproducibilityRecord:
         """Return True if record satisfies all validation rules."""
         return len(self.validate()) == 0
 
-    def assert_valid(self) -> None:
+    def assert_valid(self, require_provenance: bool = False) -> None:
         """Raise ValueError if the record violates any validation rules."""
-        errs = self.validate()
+        errs = self.validate(require_provenance=require_provenance)
         if errs:
             raise ValueError(
                 f"ReproducibilityRecord validation failed with {len(errs)} error(s):\n"
@@ -265,6 +288,8 @@ class ReproducibilityRecord:
             "timestamp": self.timestamp,
             "git_commit": self.git_commit,
             "seed": self.seed,
+            "dataset": self.dataset,
+            "dataset_revision": self.dataset_revision,
             "split_version": self.split_version,
             "config": dict(self.config),
             "threshold_source": self.threshold_source,
@@ -303,6 +328,8 @@ class ReproducibilityRecord:
             timestamp=str(data.get("timestamp") or ""),
             git_commit=data.get("git_commit"),
             seed=data.get("seed"),
+            dataset=str(data.get("dataset") or "Tiny-GenImage"),
+            dataset_revision=data.get("dataset_revision"),
             split_version=str(data.get("split_version") or ""),
             config=dict(data.get("config") or {}),
             threshold_source=str(data.get("threshold_source") or ""),
@@ -401,6 +428,8 @@ def create_reproducibility_record(
     threshold_value: float | None = None,
     metrics: dict[str, Any] | Any = None,
     seed: int | str | None = None,
+    dataset: str = "Tiny-GenImage",
+    dataset_revision: str | None = None,
     git_commit: Any = _SENTINEL,
     environment: dict[str, Any] | None = None,
     notes: str = "",
@@ -491,4 +520,6 @@ def create_reproducibility_record(
         metrics=dict(metrics),
         environment=dict(environment),
         notes=str(notes),
+        dataset=str(dataset),
+        dataset_revision=dataset_revision,
     )

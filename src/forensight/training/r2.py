@@ -59,7 +59,7 @@ def build_r2_model(
             npr_scale_factor=model_cfg["npr_scale_factor"],
             npr_mode=model_cfg["npr_mode"],
         )
-        forensic_transform = build_forensic_input_transform(model_cfg["image_size"])
+        forensic_transform = build_forensic_input_transform(model_cfg.get("image_size", 224))
 
     if variant == "semantic":
         model = SemanticOnlyDetector(
@@ -169,12 +169,15 @@ def validate_one_epoch(
     *,
     device: torch.device,
     variant: str,
-) -> float:
-    """Run validation pass and return average BCEWithLogitsLoss."""
+    return_metrics: bool = False,
+) -> float | tuple[float, float | None]:
+    """Run validation pass and return average BCEWithLogitsLoss (and optionally val_auroc)."""
     model.eval()
     criterion = nn.BCEWithLogitsLoss()
     total_loss = 0.0
     num_batches = 0
+    all_labels: list[int] = []
+    all_scores: list[float] = []
 
     for batch in loader:
         labels = batch["label"].to(device).float().view(-1, 1)
@@ -183,7 +186,26 @@ def validate_one_epoch(
         total_loss += float(loss.item())
         num_batches += 1
 
-    return total_loss / max(1, num_batches)
+        if return_metrics:
+            scores = torch.sigmoid(logits).squeeze(1).cpu().tolist()
+            if isinstance(scores, float):
+                scores = [scores]
+            lbls = labels.squeeze(1).cpu().int().tolist()
+            if isinstance(lbls, int):
+                lbls = [lbls]
+            all_scores.extend(scores)
+            all_labels.extend(lbls)
+
+    avg_loss = total_loss / max(1, num_batches)
+    if not return_metrics:
+        return avg_loss
+
+    from forensight.evaluation.metrics import calculate_auroc
+    val_auroc: float | None = None
+    if len(all_labels) > 0 and len(set(all_labels)) >= 2:
+        val_auroc = float(calculate_auroc(all_labels, all_scores))
+
+    return avg_loss, val_auroc
 
 
 def save_checkpoint(
@@ -239,6 +261,9 @@ def predict_to_prediction_set(
         batch_size = len(scores)
 
         for index in range(batch_size):
+            img_path = None
+            if "path" in batch:
+                img_path = str(batch["path"][index])
             records.append(
                 PredictionRecord(
                     sample_id=str(batch["sample_id"][index]),
@@ -247,6 +272,7 @@ def predict_to_prediction_set(
                     split=str(batch["split"][index]),
                     generator=str(batch["generator"][index]),
                     dataset=str(batch["dataset"][index]),
+                    path=img_path,
                 )
             )
 

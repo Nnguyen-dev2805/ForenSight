@@ -138,34 +138,61 @@ def main() -> int:
             device=device,
             variant=variant,
         )
-        val_loss = validate_one_epoch(
+        val_loss, val_auroc = validate_one_epoch(
             model,
             val_loader,
             device=device,
             variant=variant,
+            return_metrics=True,
         )
-        print(f"Epoch {epoch:03d}/{epochs:03d} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+        auroc_str = f"{val_auroc:.4f}" if val_auroc is not None else "N/A"
+        print(f"Epoch {epoch:03d}/{epochs:03d} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f} - Val AUROC: {auroc_str}")
 
         history.append({
             "epoch": epoch,
-            "train_loss": train_loss,
-            "val_loss": val_loss,
+            "train_loss": round(float(train_loss), 4),
+            "val_loss": round(float(val_loss), 4),
+            "val_auroc": round(float(val_auroc), 4) if val_auroc is not None else None,
         })
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            checkpoint_path = output_dir / "best.pt"
-            save_checkpoint(checkpoint_path, model, optimizer, epoch=epoch, config=config)
-            print(f"  -> New best validation loss! Saved checkpoint to {checkpoint_path}")
+            ckpt_path = output_dir / "checkpoint.pt"
+            save_checkpoint(ckpt_path, model, optimizer, epoch=epoch, config=config)
+            # Also keep best.pt as alias for compatibility
+            shutil.copyfile(ckpt_path, output_dir / "best.pt")
+            print(f"  -> New best validation loss! Saved checkpoint to {ckpt_path}")
 
-    # Persist history.json and copy config.json
-    history_path = output_dir / "history.json"
-    with history_path.open("w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    # 1. Persist train_history.json (and history.json alias)
+    for hname in ("train_history.json", "history.json"):
+        with (output_dir / hname).open("w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
 
+    # 2. Persist config.json
     config_dest = output_dir / "config.json"
     with config_dest.open("w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+    # 3. Persist sealed manifests
+    train_manifest.to_jsonl(output_dir / "train_manifest.jsonl")
+    val_manifest.to_jsonl(output_dir / "val_manifest.jsonl")
+
+    # 4. Generate dataset_audit.json for train + val
+    from forensight.data.audit import audit_manifest_leakage
+    audit_data: dict[str, Any] = {
+        "train_samples": len(train_manifest),
+        "val_samples": len(val_manifest),
+        "train_reals": len(train_manifest.filter(label=0)),
+        "train_fakes": len(train_manifest.filter(label=1)),
+        "val_reals": len(val_manifest.filter(label=0)),
+        "val_fakes": len(val_manifest.filter(label=1)),
+        "train_generators": sorted(list({r.generator for r in train_manifest if r.generator})),
+        "val_generators": sorted(list({r.generator for r in val_manifest if r.generator})),
+    }
+    leak_check = audit_manifest_leakage(train_manifest, [val_manifest])
+    audit_data["leakage"] = leak_check
+    with (output_dir / "dataset_audit.json").open("w", encoding="utf-8") as f:
+        json.dump(audit_data, f, indent=2)
 
     print(f"Training completed. Best Val Loss: {best_val_loss:.4f}. Artifacts saved in {output_dir}")
     return 0

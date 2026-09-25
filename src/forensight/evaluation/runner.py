@@ -52,6 +52,8 @@ class PredictionRecord:
     split: str | None = None
     generator: str | None = None
     dataset: str | None = None
+    path: str | None = None
+    prediction: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -102,6 +104,23 @@ class PredictionRecord:
         self.split = _clean_str(self.split)
         self.generator = _clean_str(self.generator)
         self.dataset = _clean_str(self.dataset)
+        self.path = _clean_str(self.path)
+
+        # Validate prediction
+        if self.prediction is not None:
+            pred_str = str(self.prediction).strip()
+            if not pred_str or pred_str.lower() in ("none", "nan"):
+                self.prediction = None
+            else:
+                try:
+                    pred_val = int(float(pred_str))
+                    if pred_val not in (0, 1):
+                        raise ValueError
+                    self.prediction = pred_val
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        f"PredictionRecord prediction must be 0 or 1, got: {self.prediction}"
+                    ) from exc
 
         # Validate metadata
         if not isinstance(self.metadata, dict):
@@ -111,15 +130,24 @@ class PredictionRecord:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert prediction record to dictionary."""
-        return {
+        res: dict[str, Any] = {
             "sample_id": self.sample_id,
-            "label": self.label,
-            "score": self.score,
-            "split": self.split,
-            "generator": self.generator,
-            "dataset": self.dataset,
-            "metadata": dict(self.metadata),
         }
+        if self.path is not None:
+            res["path"] = self.path
+        res["label"] = self.label
+        res["score"] = self.score
+        if self.prediction is not None:
+            res["prediction"] = self.prediction
+        if self.generator is not None:
+            res["generator"] = self.generator
+        if self.split is not None:
+            res["split"] = self.split
+        if self.dataset is not None:
+            res["dataset"] = self.dataset
+        if self.metadata:
+            res["metadata"] = dict(self.metadata)
+        return res
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PredictionRecord:
@@ -140,9 +168,21 @@ class PredictionRecord:
             s = str(val).strip()
             return s if s and s.lower() != "nan" else None
 
-        sample_id = _find_val(data, ("sample_id", "id", "image_path"))
+        sample_id = _find_val(data, ("sample_id", "id"))
+        if sample_id is None:
+            sample_id = _find_val(data, ("image_path", "path"))
         label = _find_val(data, ("label", "target", "y_true"))
-        score = _find_val(data, ("score", "prob", "prediction"))
+
+        score = _find_val(data, ("score", "prob"))
+        pred = None
+        if score is None:
+            score = _find_val(data, ("prediction",))
+        else:
+            raw_pred = data.get("prediction")
+            if raw_pred is not None and not (isinstance(raw_pred, float) and pd.isna(raw_pred)):
+                pred = raw_pred
+
+        path = _find_val(data, ("path", "image_path"))
 
         if sample_id is None:
             raise ValueError(f"Missing required sample_id in prediction record: {data}")
@@ -171,7 +211,7 @@ class PredictionRecord:
 
         # Capture leftover keys into metadata
         standard_keys = {
-            "sample_id", "id", "image_path",
+            "sample_id", "id", "image_path", "path",
             "label", "target", "y_true",
             "score", "prob", "prediction",
             "split", "generator", "dataset", "metadata",
@@ -187,6 +227,8 @@ class PredictionRecord:
             split=split,
             generator=generator,
             dataset=dataset,
+            path=_clean_str(path),
+            prediction=pred,
             metadata=meta,
         )
 
@@ -294,6 +336,8 @@ class PredictionSet:
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert PredictionSet to pandas DataFrame."""
+        has_path = any(r.path is not None for r in self._records)
+        has_prediction = any(r.prediction is not None for r in self._records)
         rows = []
         for r in self._records:
             row = {
@@ -305,6 +349,10 @@ class PredictionSet:
                 "dataset": r.dataset,
                 "metadata": json.dumps(r.metadata) if r.metadata else "{}",
             }
+            if has_path:
+                row["path"] = r.path or ""
+            if has_prediction:
+                row["prediction"] = r.prediction if r.prediction is not None else ""
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -312,22 +360,35 @@ class PredictionSet:
         """Save PredictionSet to CSV file."""
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        has_path = any(r.path is not None for r in self._records)
+        has_prediction = any(r.prediction is not None for r in self._records)
+
+        fieldnames = ["sample_id"]
+        if has_path:
+            fieldnames.append("path")
+        fieldnames.extend(["label", "score"])
+        if has_prediction:
+            fieldnames.append("prediction")
+        fieldnames.extend(["split", "generator", "dataset", "metadata"])
+
         with open(target, "w", encoding="utf-8", newline="") as f:
-            fieldnames = ["sample_id", "label", "score", "split", "generator", "dataset", "metadata"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for r in self._records:
-                writer.writerow(
-                    {
-                        "sample_id": r.sample_id,
-                        "label": r.label,
-                        "score": r.score,
-                        "split": r.split or "",
-                        "generator": r.generator or "",
-                        "dataset": r.dataset or "",
-                        "metadata": json.dumps(r.metadata) if r.metadata else "",
-                    }
-                )
+                row_dict = {
+                    "sample_id": r.sample_id,
+                    "label": r.label,
+                    "score": r.score,
+                    "split": r.split or "",
+                    "generator": r.generator or "",
+                    "dataset": r.dataset or "",
+                    "metadata": json.dumps(r.metadata) if r.metadata else "",
+                }
+                if has_path:
+                    row_dict["path"] = r.path or ""
+                if has_prediction:
+                    row_dict["prediction"] = r.prediction if r.prediction is not None else ""
+                writer.writerow(row_dict)
 
     def to_jsonl(self, path: str | Path) -> None:
         """Save PredictionSet to JSONL file."""
@@ -725,6 +786,10 @@ def evaluate_predictions(
         "default_threshold": float(default_threshold),
         "invariant_preserved": True,
     }
+
+    # Annotate records with calibrated binary decision using tau_star
+    for r in predictions.records:
+        r.prediction = 1 if r.score >= tau_star else 0
 
     # 3. Determine overall evaluation partition
     # Protocol rule: Test/benchmark overall metrics MUST NOT evaluate on validation or train samples

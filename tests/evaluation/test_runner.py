@@ -770,3 +770,53 @@ class TestThresholdAndPartitionInvariants:
         assert val_hash is not None
         assert len(val_hash) == 16
         assert report.run_metadata["val_cohort_hash"] == val_hash
+
+    def test_predictions_artifact_contract_schema(self, tmp_path):
+        """Verify predictions.jsonl schema matches research artifact contract."""
+        records = [
+            PredictionRecord(
+                sample_id="tiny_001",
+                label=1,
+                score=0.73,
+                generator="midjourney",
+                split="test",
+                dataset="tiny_genimage",
+                path="tiny_genimage/midjourney/val/ai/0001.jpg",
+            ),
+            PredictionRecord(
+                sample_id="tiny_002",
+                label=0,
+                score=0.12,
+                generator="nature",
+                split="test",
+                dataset="tiny_genimage",
+                path="tiny_genimage/nature/val/nature/0002.jpg",
+            ),
+        ]
+        pset = PredictionSet(records)
+        # Evaluate with default threshold 0.5
+        evaluate_predictions(pset, default_threshold=0.5)
+
+        jsonl_path = tmp_path / "predictions.jsonl"
+        pset.to_jsonl(jsonl_path)
+        assert jsonl_path.exists()
+
+        lines = jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+        assert len(lines) == 2
+        d1 = json.loads(lines[0])
+        assert d1["sample_id"] == "tiny_001"
+        assert d1["path"] == "tiny_genimage/midjourney/val/ai/0001.jpg"
+        assert d1["label"] == 1
+        assert d1["score"] == 0.73
+        assert d1["prediction"] == 1
+        assert d1["generator"] == "midjourney"
+        assert d1["split"] == "test"
+
+        d2 = json.loads(lines[1])
+        assert d2["sample_id"] == "tiny_002"
+        assert d2["path"] == "tiny_genimage/nature/val/nature/0002.jpg"
+        assert d2["label"] == 0
+        assert d2["score"] == 0.12
+        assert d2["prediction"] == 0
+        assert d2["generator"] == "nature"
+        assert d2["split"] == "test"

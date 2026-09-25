@@ -24,7 +24,7 @@ logger = logging.getLogger("run_on_kaggle")
 
 DEFAULT_KERNEL_DIR = "deploy/kaggle"
 DEFAULT_KERNEL_SLUG = "truongnhatnguyen2805/forensight-r2-fusion-training"
-DEFAULT_OUTPUT_DIR = "results/r2_kaggle"
+DEFAULT_OUTPUT_DIR = "results"
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,6 +100,7 @@ def download_outputs(kernel_slug: str, output_dir: str | Path) -> bool:
                         if chunk:
                             f.write(chunk)
                 logger.info("Saved %s (%.2f MB)", item.file_name, target_file.stat().st_size / (1024 * 1024))
+        unpack_downloaded_zips(out_dir)
         return True
     except Exception as e:
         logger.warning("Python streaming download failed (%s), falling back to CLI...", e)
@@ -108,7 +109,21 @@ def download_outputs(kernel_slug: str, output_dir: str | Path) -> bool:
         print(res.stdout)
         if res.stderr:
             print(res.stderr, file=sys.stderr)
+        if res.returncode == 0:
+            unpack_downloaded_zips(out_dir)
         return res.returncode == 0
+
+
+def unpack_downloaded_zips(out_dir: Path) -> None:
+    import zipfile
+    for zip_file in list(out_dir.glob("*.zip")):
+        logger.info("Unpacking archive %s into %s ...", zip_file.name, out_dir)
+        with zipfile.ZipFile(zip_file, "r") as zf:
+            names = zf.namelist()
+            target_dir = out_dir
+            if any(n.startswith("r2/") for n in names) and out_dir.resolve().name == "r2":
+                target_dir = out_dir.parent
+            zf.extractall(target_dir)
 
 
 

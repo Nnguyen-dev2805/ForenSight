@@ -79,6 +79,7 @@ class R2ImageDataset(Dataset[dict[str, Any]]):
                 "split": record.split,
                 "generator": record.generator,
                 "dataset": record.dataset,
+                "path": str(record.image_path),
             }
             if self.clip_transform is not None:
                 sample["clip_image"] = self.clip_transform(image)
