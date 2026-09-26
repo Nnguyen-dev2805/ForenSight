@@ -1553,6 +1553,17 @@ def main() -> int:
     parser.add_argument("--manifest-dir", type=str, default=None, help="Directory containing sealed manifests (train_manifest.jsonl, val_manifest.jsonl, etc.)")
     parser.add_argument("--base-dir", type=str, default=None, help="Base directory for resolving relative image paths in sealed manifests")
     parser.add_argument("--learning-rate", type=float, default=None, help="Explicit learning rate override (defaults to 1e-3 for semantic, 1e-4 for forensic/fusion)")
+
+    run_config_path = Path(__file__).resolve().parent / "run_config.json"
+    if run_config_path.exists():
+        try:
+            with open(run_config_path, "r", encoding="utf-8") as f:
+                cfg_overrides = json.load(f)
+            parser.set_defaults(**cfg_overrides)
+            logger.info("Loaded run configuration overrides from %s: %s", run_config_path.name, cfg_overrides)
+        except Exception as e:
+            logger.warning("Could not read run_config.json: %s", e)
+
     args, unknown = parser.parse_known_args()
 
     print("=" * 80)

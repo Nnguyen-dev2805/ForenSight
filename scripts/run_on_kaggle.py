@@ -18,6 +18,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from typing import Any
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("run_on_kaggle")
@@ -37,6 +38,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logs", action="store_true", help="Print recent execution logs.")
     parser.add_argument("--download", action="store_true", help="Download output files (checkpoint, report).")
     parser.add_argument("--watch", action="store_true", help="Watch kernel status until complete and auto-download results.")
+    parser.add_argument("--experiment", choices=["canonical", "logo", "all_in_one", "all"], default=None, help="Experiment paradigm to execute")
+    parser.add_argument("--variant", choices=["fusion", "semantic_only", "forensic_only", "all"], default=None, help="Model variant to run")
+    parser.add_argument("--leave-out", default=None, help="Held-out generator for LOGO")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate override")
     return parser.parse_args()
 
 
@@ -48,7 +56,7 @@ def get_kaggle_cmd() -> list[str]:
     return ["kaggle"]
 
 
-def push_kernel(kernel_dir: str | Path) -> bool:
+def push_kernel(kernel_dir: str | Path, config: dict | None = None) -> bool:
     kernel_path = Path(kernel_dir)
     try:
         git_res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
@@ -66,6 +74,12 @@ def push_kernel(kernel_dir: str | Path) -> bool:
             indent=2,
         )
     logger.info("Injected provenance git commit '%s' into %s", git_sha, commit_file)
+
+    if config:
+        config_file = kernel_path / "run_config.json"
+        with open(config_file, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        logger.info("Injected run config %s into %s", config, config_file)
 
     cmd = get_kaggle_cmd() + ["kernels", "push", "-p", str(kernel_dir)]
     logger.info("Pushing kernel to Kaggle: %s", " ".join(cmd))
@@ -173,7 +187,23 @@ def main() -> int:
         args.status = True
 
     if args.push:
-        success = push_kernel(args.kernel_dir)
+        run_cfg: dict[str, Any] = {}
+        if args.experiment:
+            run_cfg["experiment"] = args.experiment
+        if args.variant:
+            run_cfg["variant"] = args.variant
+        if args.leave_out:
+            run_cfg["leave_out"] = args.leave_out
+        if args.seed is not None:
+            run_cfg["seed"] = args.seed
+        if args.epochs is not None:
+            run_cfg["epochs"] = args.epochs
+        if args.batch_size is not None:
+            run_cfg["batch_size"] = args.batch_size
+        if args.learning_rate is not None:
+            run_cfg["learning_rate"] = args.learning_rate
+
+        success = push_kernel(args.kernel_dir, config=run_cfg if run_cfg else None)
         if not success:
             return 1
         time.sleep(3)
