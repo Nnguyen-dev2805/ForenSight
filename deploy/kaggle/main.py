@@ -298,7 +298,7 @@ def detect_ext(raw: bytes) -> str:
 def prepare_tiny_genimage(
     repo_id: str = "TheKernel01/Tiny-GenImage",
     target_root: str = "/tmp/tiny_genimage",
-    revision: str = "v1.0",
+    revision: str = "main",
 ) -> tuple[list[dict[str, Any]], str]:
     """Download Parquet shards with pinned revision, resolve HF commit SHA, and extract images to disk calculating SHA-256 hashes."""
     target_path = Path(target_root)
@@ -312,7 +312,15 @@ def prepare_tiny_genimage(
             resolved_commit_sha = str(info.sha)
             logger.info("Resolved HF revision tag '%s' -> commit SHA: %s", revision, resolved_commit_sha)
     except Exception as e:
-        logger.warning("Could not resolve dataset commit SHA via HfApi (%s), keeping '%s'", e, revision)
+        logger.warning("Could not resolve dataset commit SHA via HfApi (%s) for revision '%s'", e, revision)
+        if revision != "main":
+            try:
+                info = api.dataset_info(repo_id=repo_id, revision="main")
+                if hasattr(info, "sha") and info.sha:
+                    resolved_commit_sha = str(info.sha)
+                    logger.info("Fell back to 'main' branch -> commit SHA: %s", resolved_commit_sha)
+            except Exception as e2:
+                logger.warning("Fallback to 'main' branch also failed: %s", e2)
 
     repo_files = api.list_repo_files(repo_id=repo_id, revision=resolved_commit_sha, repo_type="dataset")
 
@@ -1530,7 +1538,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=str, default="/kaggle/working", help="Output directory")
     parser.add_argument("--target-root", type=str, default="/tmp/tiny_genimage", help="Data extraction root")
     parser.add_argument("--clip-model", type=str, default="ViT-L-14", help="OpenCLIP model name (default: ViT-L-14)")
-    parser.add_argument("--dataset-revision", type=str, default="v1.0", help="Hugging Face dataset revision tag")
+    parser.add_argument("--dataset-revision", type=str, default="main", help="Hugging Face dataset revision tag or branch (default: main)")
     parser.add_argument(
         "--variant",
         type=str,
