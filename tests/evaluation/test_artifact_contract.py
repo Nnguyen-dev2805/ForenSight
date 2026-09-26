@@ -92,10 +92,17 @@ def validate_run_artifact_contract(run_dir: str | Path) -> dict[str, Any]:
     assert len(val_m) > 0
     test_m = Manifest.from_jsonl(directory / "test_manifest.jsonl")
     assert len(test_m) > 0
+    # Invariant: No duplicate samples in test manifest
+    test_ids = [r.sample_id for r in test_m]
+    assert len(test_ids) == len(set(test_ids)), f"Test manifest contains duplicate IDs: {len(test_ids) - len(set(test_ids))}"
 
     # 5. predictions.jsonl
     pset = PredictionSet.from_jsonl(directory / "predictions.jsonl")
     assert len(pset) > 0
+    pset_ids = [r.sample_id for r in pset]
+    assert len(pset_ids) == len(set(pset_ids)), f"Predictions contains duplicate IDs: {len(pset_ids) - len(set(pset_ids))}"
+    assert len(pset_ids) == len(test_ids), f"Prediction count ({len(pset_ids)}) != test manifest count ({len(test_ids)})"
+
     with (directory / "predictions.jsonl").open("r", encoding="utf-8") as f:
         for line in f:
             rec = json.loads(line)
@@ -139,7 +146,11 @@ def validate_run_artifact_contract(run_dir: str | Path) -> dict[str, Any]:
         audit = json.load(f)
     assert "val_samples" in audit
     assert "test_samples" in audit
-    assert "leakage" in audit
+    leakage = audit["leakage"]
+    if "has_leakage" in leakage:
+        assert leakage["has_leakage"] is False
+    if "exact_duplicates" in leakage:
+        assert leakage["exact_duplicates"] == 0
 
     return {
         "status": "VALID",
@@ -267,36 +278,51 @@ def test_artifact_contract_end_to_end(tmp_path: Path):
 
 
 def test_kaggle_runner_artifact_contract(tmp_path: Path):
-    """Verify that deploy/kaggle/main.py produces all Artifact Contract files and valid zip packaging."""
-    from deploy.kaggle.main import train_and_eval_experiment, zip_results
+    """Verify that deploy/kaggle/main.py produces all Artifact Contract files and valid zip packaging for LOGO and All-in-One."""
+    from deploy.kaggle.main import build_logo_splits, build_all_in_one_splits, train_and_eval_experiment, zip_results
+    import hashlib
     from torchvision import transforms
 
     img_dir = tmp_path / "images"
     img_dir.mkdir()
 
-    # Generate small synthetic test images
+    # Generate synthetic records across multiple generators
     records = []
-    for split in ["train", "val", "test"]:
-        for i in range(4):
-            lbl = i % 2
-            gen = "nature" if lbl == 0 else "midjourney"
-            p = img_dir / f"{split}_{i}.png"
-            Image.new("RGB", (32, 32), color=(i * 25, 50, 50)).save(p)
-            records.append({
-                "sample_id": f"samp_{split}_{i}",
-                "image_path": f"images/{split}_{i}.png",
-                "abs_path": str(p),
-                "label": lbl,
-                "generator": gen,
-                "split": split if split != "test" else "test_midjourney",
-                "dataset": "TheKernel01/Tiny-GenImage",
-            })
+    gens = ["nature", "midjourney", "sd14", "adm"]
+    counter = 0
+    for g in gens:
+        for split_role in ["train", "validation"]:
+            for i in range(4):
+                counter += 1
+                lbl = 0 if g == "nature" else 1
+                p = img_dir / f"{g}_{split_role}_{i}.png"
+                img = Image.new("RGB", (32, 32), color=(counter * 7 % 255, (counter * 13) % 255, (counter * 19) % 255))
+                img.save(p)
+                raw_bytes = p.read_bytes()
+                records.append({
+                    "sample_id": f"tiny_genimage_{g}_{split_role}_{i:06d}",
+                    "image_path": f"tiny_genimage/{g}/{split_role}/{g}_{split_role}_{i:06d}.png",
+                    "abs_path": str(p),
+                    "label": lbl,
+                    "generator": g,
+                    "raw_split": split_role,
+                    "dataset": "TheKernel01/Tiny-GenImage",
+                    "content_hash": hashlib.sha256(raw_bytes).hexdigest(),
+                })
 
-    splits = {
-        "train": [r for r in records if r["split"] == "train"],
-        "val": [r for r in records if r["split"] == "val"],
-        "test_midjourney": [r for r in records if r["split"] == "test_midjourney"],
-    }
+    # Test LOGO splits
+    logo_splits = build_logo_splits(records, leave_out_gen="midjourney", n_val_per_gen=2, seed=42)
+    assert "test_cross_generator_ood" in logo_splits
+    assert "test_in_domain_seen" in logo_splits
+
+    # Test All-In-One splits (MUST NOT have duplicate test samples)
+    aio_splits = build_all_in_one_splits(records, n_val_per_gen=2, seed=42)
+    aio_test_splits = [k for k in aio_splits.keys() if k.startswith("test_")]
+    all_aio_test_records = []
+    for s in aio_test_splits:
+        all_aio_test_records.extend(aio_splits[s])
+    aio_test_ids = [r["sample_id"] for r in all_aio_test_records]
+    assert len(aio_test_ids) == len(set(aio_test_ids)), "All-in-One contains duplicate test samples!"
 
     class DummyModel(torch.nn.Module):
         def __init__(self):
@@ -308,9 +334,9 @@ def test_kaggle_runner_artifact_contract(tmp_path: Path):
 
     t = transforms.ToTensor()
     res = train_and_eval_experiment(
-        experiment_name="test_kaggle_exp",
+        experiment_name="logo_midjourney_fusion",
         model=DummyModel(),
-        splits=splits,
+        splits=logo_splits,
         clip_transform=t,
         forensic_transform=t,
         device=torch.device("cpu"),
@@ -322,14 +348,48 @@ def test_kaggle_runner_artifact_contract(tmp_path: Path):
         git_commit="test_commit_sha",
     )
 
-    exp_run_dir = tmp_path / "results" / "r2" / "test_kaggle_exp" / "seed_42"
+    exp_run_dir = tmp_path / "results" / "r2" / "logo_midjourney_fusion" / "seed_42"
     result = validate_run_artifact_contract(exp_run_dir)
     assert result["status"] == "VALID"
     assert result["epochs"] == 1
-    assert result["test_samples"] == 4
+
+    # Verify manifest splits are proper canonical names
+    test_manifest = Manifest.from_jsonl(exp_run_dir / "test_manifest.jsonl")
+    splits_present = {r.split for r in test_manifest}
+    assert "cross_generator_ood" in splits_present or "in_domain_test" in splits_present
 
     # Test zip packaging
     zip_path = tmp_path / "results_r2.zip"
     zip_results(tmp_path / "results", zip_path)
     assert zip_path.exists() and zip_path.stat().st_size > 0
 
+
+def test_kaggle_seed_control(tmp_path: Path):
+    """Verify that different seeds in build_logo_splits produce different splits."""
+    from deploy.kaggle.main import build_logo_splits
+
+    records = []
+    for i in range(20):
+        records.append({
+            "sample_id": f"samp_real_{i}",
+            "image_path": f"img_real_{i}.png",
+            "label": 0,
+            "generator": "nature",
+            "raw_split": "train" if i < 10 else "validation",
+        })
+    for g in ["sd14", "midjourney"]:
+        for i in range(20):
+            records.append({
+                "sample_id": f"samp_{g}_{i}",
+                "image_path": f"img_{g}_{i}.png",
+                "label": 1,
+                "generator": g,
+                "raw_split": "train" if i < 10 else "validation",
+            })
+
+    splits_42 = build_logo_splits(records, leave_out_gen="midjourney", n_val_per_gen=2, seed=42)
+    splits_99 = build_logo_splits(records, leave_out_gen="midjourney", n_val_per_gen=2, seed=99)
+
+    order_42 = [r["sample_id"] for r in splits_42["train"]]
+    order_99 = [r["sample_id"] for r in splits_99["train"]]
+    assert order_42 != order_99, "Different seeds must produce different shuffle ordering!"

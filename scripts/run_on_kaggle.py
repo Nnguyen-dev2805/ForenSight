@@ -49,6 +49,24 @@ def get_kaggle_cmd() -> list[str]:
 
 
 def push_kernel(kernel_dir: str | Path) -> bool:
+    kernel_path = Path(kernel_dir)
+    try:
+        git_res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+        git_sha = git_res.stdout.strip() or "unversioned"
+    except Exception:
+        git_sha = "unversioned"
+    commit_file = kernel_path / "commit_info.json"
+    with open(commit_file, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "git_commit": git_sha,
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+            f,
+            indent=2,
+        )
+    logger.info("Injected provenance git commit '%s' into %s", git_sha, commit_file)
+
     cmd = get_kaggle_cmd() + ["kernels", "push", "-p", str(kernel_dir)]
     logger.info("Pushing kernel to Kaggle: %s", " ".join(cmd))
     res = subprocess.run(cmd, capture_output=True, text=True)

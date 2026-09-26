@@ -200,8 +200,10 @@ def main() -> int:
     if args.predictions_out:
         out_path = Path(args.predictions_out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        combined.to_jsonl(out_path)
-        print(f"Saved {len(combined)} prediction records to {out_path}")
+        # Save evaluated test records (strictly excluding validation partition)
+        test_only = PredictionSet([r for r in combined if r.split not in ("val", "validation", "valid")])
+        test_only.to_jsonl(out_path)
+        print(f"Saved {len(test_only)} test prediction records to {out_path}")
 
     if args.report_json:
         report_json_path = Path(args.report_json)
