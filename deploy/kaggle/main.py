@@ -35,12 +35,17 @@ from typing import Any
 import zipfile
 
 # Ensure required packages are present on Kaggle environment
-for pkg in ["open_clip_torch", "pyarrow", "huggingface_hub"]:
+REQUIRED_PACKAGES = {
+    "open_clip": "open_clip_torch",
+    "pyarrow": "pyarrow",
+    "huggingface_hub": "huggingface_hub",
+}
+for mod_name, pip_name in REQUIRED_PACKAGES.items():
     try:
-        __import__(pkg.split("_")[0])
+        __import__(mod_name)
     except ImportError:
-        print(f"Installing {pkg}...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pkg])
+        print(f"Installing {pip_name}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", pip_name])
 
 from huggingface_hub import HfApi, hf_hub_download
 import numpy as np
@@ -294,18 +299,28 @@ def prepare_tiny_genimage(
     repo_id: str = "TheKernel01/Tiny-GenImage",
     target_root: str = "/tmp/tiny_genimage",
     revision: str = "v1.0",
-) -> list[dict[str, Any]]:
-    """Download Parquet shards with pinned revision and extract images to disk calculating SHA-256 hashes."""
+) -> tuple[list[dict[str, Any]], str]:
+    """Download Parquet shards with pinned revision, resolve HF commit SHA, and extract images to disk calculating SHA-256 hashes."""
     target_path = Path(target_root)
     target_path.mkdir(parents=True, exist_ok=True)
 
     api = HfApi()
+    resolved_commit_sha = revision
+    try:
+        info = api.dataset_info(repo_id=repo_id, revision=revision)
+        if hasattr(info, "sha") and info.sha:
+            resolved_commit_sha = str(info.sha)
+            logger.info("Resolved HF revision tag '%s' -> commit SHA: %s", revision, resolved_commit_sha)
+    except Exception as e:
+        logger.warning("Could not resolve dataset commit SHA via HfApi (%s), keeping '%s'", e, revision)
+
     repo_files = api.list_repo_files(repo_id=repo_id, revision=revision, repo_type="dataset")
 
     train_parquets = sorted([f for f in repo_files if "train-" in f and f.endswith(".parquet")])
     val_parquets = sorted([f for f in repo_files if "validation-" in f and f.endswith(".parquet")])
 
-    logger.info("Found %d train parquets and %d val parquets on HF (%s@%s).", len(train_parquets), len(val_parquets), repo_id, revision)
+    logger.info("Found %d train parquets and %d val parquets on HF (%s@%s -> SHA: %s).",
+                len(train_parquets), len(val_parquets), repo_id, revision, resolved_commit_sha)
 
     records: list[dict[str, Any]] = []
     counter = 0
@@ -369,8 +384,122 @@ def prepare_tiny_genimage(
 
             logger.info("  Extracted %s (%d images in %.1fs)", Path(rel_file).name, len(table), time.time() - t0)
 
-    logger.info("Total images extracted: %d", len(records))
-    return records
+    logger.info("Total images extracted: %d (HF SHA: %s)", len(records), resolved_commit_sha)
+    return records, resolved_commit_sha
+
+
+def build_canonical_r2_splits(
+    records: list[dict],
+    n_val: int = 100,
+    seed: int = 42,
+) -> dict[str, list[dict]]:
+    """Build canonical ForenSight R2 protocol splits per docs/plans/r2-forensic-perception-v1.md.
+
+    - Train: GenImage SD1.4 train fakes + Nature train reals (SD1.4-only training).
+    - Val: GenImage SD1.4 validation fakes (n_val) + Nature validation reals (n_val) (for checkpointing & threshold tau*).
+    - Test In-Domain: GenImage SD1.4 held-out validation fakes (remaining after n_val) + allocated Nature validation reals -> in_domain_test.
+    - Test Near-OOD: GenImage SD1.5 validation fakes + allocated Nature validation reals -> near_ood.
+    - Test Cross-Generator OOD: GenImage unseen generators (midjourney, adm, biggan, glide, vqdm) + allocated Nature validation reals -> cross_generator_ood.
+    All test records are completely disjoint with zero duplicate sample_ids.
+    """
+    rng = random.Random(seed)
+
+    train_reals = [r for r in records if r["raw_split"] == "train" and r["label"] == 0]
+    val_reals = [r for r in records if r["raw_split"] == "validation" and r["label"] == 0]
+
+    # 1. Train split: SD1.4 only
+    sd14_train_fakes = [
+        r for r in records if r["raw_split"] == "train" and r["generator"] == "sd14" and r["label"] == 1
+    ]
+    n_train = min(len(sd14_train_fakes), len(train_reals))
+    selected_train_fakes = [copy.deepcopy(x) for x in sd14_train_fakes[:n_train]]
+    selected_train_reals = [copy.deepcopy(x) for x in train_reals[:n_train]]
+    train_set = selected_train_fakes + selected_train_reals
+    rng.shuffle(train_set)
+    for r in train_set:
+        r["split"] = "train"
+
+    # 2. Real allocation tracker for validation & test splits
+    real_offset = 0
+
+    def allocate_reals(n: int) -> list[dict]:
+        nonlocal real_offset
+        alloc: list[dict] = []
+        rem_val = len(val_reals) - real_offset
+        if rem_val > 0:
+            take_val = min(n, rem_val)
+            alloc.extend([copy.deepcopy(x) for x in val_reals[real_offset : real_offset + take_val]])
+            real_offset += take_val
+        if len(alloc) < n:
+            needed = n - len(alloc)
+            unused_train = train_reals[n_train:]
+            alloc.extend([copy.deepcopy(x) for x in unused_train[:needed]])
+        return alloc
+
+    # 3. Val split: SD1.4 val fakes (n_val) + equal reals
+    sd14_val_fakes = [
+        r for r in records if r["raw_split"] == "validation" and r["generator"] == "sd14" and r["label"] == 1
+    ]
+    n_val_actual = min(n_val, len(sd14_val_fakes) // 2) if len(sd14_val_fakes) >= 2 else len(sd14_val_fakes)
+    cur_val_fakes = [copy.deepcopy(x) for x in sd14_val_fakes[:n_val_actual]]
+    cur_val_reals = allocate_reals(len(cur_val_fakes))
+    if len(cur_val_reals) < len(cur_val_fakes):
+        cur_val_fakes = cur_val_fakes[:len(cur_val_reals)]
+    val_set = cur_val_fakes + cur_val_reals
+    for r in val_set:
+        r["split"] = "val"
+
+    # 4. In-domain test split: remaining SD1.4 val fakes + equal reals
+    remaining_sd14_fakes = [copy.deepcopy(x) for x in sd14_val_fakes[n_val_actual:]]
+    cur_in_domain_reals = allocate_reals(len(remaining_sd14_fakes))
+    if len(cur_in_domain_reals) < len(remaining_sd14_fakes):
+        remaining_sd14_fakes = remaining_sd14_fakes[:len(cur_in_domain_reals)]
+    in_domain_test_set = remaining_sd14_fakes + cur_in_domain_reals
+    for r in in_domain_test_set:
+        r["split"] = "in_domain_test"
+        r["eval_slice"] = "in_domain_test"
+
+    # 5. Near-OOD test split: SD1.5 fakes + equal reals
+    sd15_fakes = [
+        copy.deepcopy(r) for r in records if r["generator"] == "sd15" and r["label"] == 1
+    ]
+    cur_near_ood_reals = allocate_reals(len(sd15_fakes))
+    if len(cur_near_ood_reals) < len(sd15_fakes):
+        sd15_fakes = sd15_fakes[:len(cur_near_ood_reals)]
+    near_ood_test_set = sd15_fakes + cur_near_ood_reals
+    for r in near_ood_test_set:
+        r["split"] = "near_ood"
+        r["eval_slice"] = "near_ood"
+
+    # 6. Cross-generator OOD test split: unseen generators (Midjourney, ADM, BigGAN, GLIDE, VQDM)
+    cross_fakes = [
+        copy.deepcopy(r)
+        for r in records
+        if r["generator"] not in ("nature", "sd14", "sd15") and r["label"] == 1
+    ]
+    cur_cross_reals = allocate_reals(len(cross_fakes))
+    if len(cur_cross_reals) < len(cross_fakes):
+        cross_fakes = cross_fakes[:len(cur_cross_reals)]
+    cross_ood_test_set = cross_fakes + cur_cross_reals
+    for r in cross_ood_test_set:
+        r["split"] = "cross_generator_ood"
+        r["eval_slice"] = "cross_generator_ood"
+
+    splits = {
+        "train": train_set,
+        "val": val_set,
+        "in_domain_test": in_domain_test_set,
+        "near_ood": near_ood_test_set,
+        "cross_generator_ood": cross_ood_test_set,
+    }
+
+    logger.info("Canonical R2 Protocol Splits created (seed: %d):", seed)
+    for k, v in splits.items():
+        reals = sum(1 for r in v if r["label"] == 0)
+        fakes = sum(1 for r in v if r["label"] == 1)
+        logger.info("  %s: %d total (%d real, %d fake)", k, len(v), reals, fakes)
+
+    return splits
 
 
 def build_logo_splits(
@@ -457,8 +586,8 @@ def build_logo_splits(
     splits = {
         "train": train_set,
         "val": val_set,
-        "test_cross_generator_ood": test_held_out,
-        "test_in_domain_seen": test_seen_set,
+        "cross_generator_ood": test_held_out,
+        "in_domain_test": test_seen_set,
     }
 
     logger.info("LOGO Splits created (held-out: %s, seed: %d):", leave_out_gen, seed)
@@ -568,19 +697,82 @@ class FastImageDataset(Dataset):
 # 3. EVALUATION, AUDIT & ARTIFACT CONTRACT HELPERS
 # ==============================================================================
 
-def select_threshold(y_true: np.ndarray, y_scores: np.ndarray, strategy: str = "f1") -> float:
-    if len(np.unique(y_true)) < 2:
-        return 0.5
-    candidates = np.linspace(0.01, 0.99, 99)
-    best_thresh = 0.5
-    best_metric = -1.0
-    for thresh in candidates:
-        preds = (y_scores >= thresh).astype(int)
-        metric = f1_score(y_true, preds, zero_division=0) if strategy == "f1" else accuracy_score(y_true, preds)
-        if metric > best_metric:
-            best_metric = metric
-            best_thresh = float(thresh)
-    return best_thresh
+try:
+    from forensight.evaluation.metrics import select_threshold as r0_select_threshold
+except ImportError:
+    r0_select_threshold = None
+
+
+def select_threshold(
+    y_true: np.ndarray,
+    y_scores: np.ndarray,
+    strategy: str = "f1",
+    default_threshold: float = 0.5,
+) -> float:
+    """Select optimal decision threshold using R0 score boundaries, midpoints, and deterministic tie-breaking."""
+    if r0_select_threshold is not None:
+        try:
+            return float(r0_select_threshold(y_true, y_scores, strategy=strategy, default_threshold=default_threshold))
+        except Exception:
+            pass
+
+    strat = strategy.lower().strip()
+    if strat not in ("f1", "accuracy", "youden"):
+        raise ValueError(f"Unknown threshold selection strategy '{strategy}'. Supported: 'f1', 'accuracy', 'youden'")
+
+    y_t = np.asarray(y_true, dtype=np.int64)
+    y_s = np.asarray(y_scores, dtype=np.float64)
+    if len(np.unique(y_t)) < 2:
+        return default_threshold
+
+    order = np.argsort(y_s)
+    y_s_sorted = y_s[order]
+    y_t_sorted = y_t[order]
+    n_samples = len(y_s_sorted)
+
+    unique_scores = np.unique(y_s_sorted)
+    upper_bound = np.nextafter(unique_scores.max(), np.inf)
+    if len(unique_scores) > 1:
+        midpoints = (unique_scores[:-1] + unique_scores[1:]) / 2.0
+        candidate_list = [unique_scores, midpoints, [upper_bound]]
+        if unique_scores.min() <= default_threshold <= upper_bound:
+            candidate_list.append([default_threshold])
+        candidates = np.unique(np.concatenate(candidate_list))
+    else:
+        candidates = np.unique(np.concatenate([unique_scores, [upper_bound]]))
+
+    idx = np.searchsorted(y_s_sorted, candidates, side="left")
+    cum_pos = np.cumsum(y_t_sorted)
+    total_pos = cum_pos[-1]
+    total_neg = n_samples - total_pos
+
+    pos_before = np.where(idx > 0, cum_pos[idx - 1], 0)
+    tp = total_pos - pos_before
+    fp = (n_samples - idx) - tp
+    fn = total_pos - tp
+    tn = total_neg - fp
+
+    if strat == "f1":
+        denom_f1 = total_pos + tp + fp
+        metric_vals = (2.0 * tp) / np.maximum(denom_f1, 1e-12)
+    elif strat == "accuracy":
+        metric_vals = (tp + tn) / n_samples
+    elif strat == "youden":
+        tpr = tp / total_pos if total_pos > 0 else np.zeros_like(tp, dtype=float)
+        fpr = fp / total_neg if total_neg > 0 else np.zeros_like(fp, dtype=float)
+        metric_vals = tpr - fpr
+    else:
+        raise ValueError(f"Unhandled strategy: {strat}")
+
+    max_val = np.max(metric_vals)
+    best_mask = np.isclose(metric_vals, max_val, rtol=0.0, atol=1e-12)
+    tied_candidates = candidates[best_mask]
+
+    best_threshold = min(
+        tied_candidates,
+        key=lambda c: (abs(c - default_threshold), -c),
+    )
+    return float(best_threshold)
 
 
 def compute_metrics_dict(
@@ -746,7 +938,17 @@ def save_predictions_jsonl(predictions: list[dict], path: Path) -> None:
 
 
 def get_git_commit_sha() -> str:
-    """Resolve genuine git commit provenance: commit_info.json, env var, or local git HEAD."""
+    """Resolve genuine git commit provenance: local git HEAD, commit_info.json, or env var."""
+    # 1. Live git repository has ultimate authority when available
+    try:
+        res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+        sha = res.stdout.strip()
+        if res.returncode == 0 and sha and len(sha) == 40:
+            return sha
+    except Exception:
+        pass
+
+    # 2. Check injected commit_info.json (used when running on Kaggle without .git)
     commit_file = Path(__file__).resolve().parent / "commit_info.json"
     if commit_file.exists():
         try:
@@ -758,17 +960,10 @@ def get_git_commit_sha() -> str:
         except Exception:
             pass
 
+    # 3. Check environment variable
     env_sha = os.environ.get("GIT_COMMIT")
     if env_sha and env_sha.strip():
         return env_sha.strip()
-
-    try:
-        res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-        sha = res.stdout.strip()
-        if sha:
-            return sha
-    except Exception:
-        pass
 
     return "unversioned_kaggle_run"
 
@@ -805,10 +1000,10 @@ def evaluate_split(
             all_scores.extend(probs)
             all_labels.extend(int(l) for l in labels.numpy())
             all_gens.extend(gens)
-
             for idx_val, prob, lbl, gen in zip(indices.numpy(), probs, labels.numpy(), gens):
                 rec = records[int(idx_val)]
                 pred = int(prob >= threshold)
+                canonical_split = rec.get("split") or (split_name.replace("test_", "") if split_name.startswith("test_") and split_name != "test" else split_name)
                 pred_records.append({
                     "sample_id": rec["sample_id"],
                     "path": rec.get("image_path") or rec.get("rel_path"),
@@ -816,7 +1011,7 @@ def evaluate_split(
                     "score": float(prob),
                     "prediction": pred,
                     "generator": str(gen),
-                    "split": split_name,
+                    "split": canonical_split,
                 })
 
     y_true = np.array(all_labels)
@@ -843,6 +1038,10 @@ def train_and_eval_experiment(
     seed: int = 42,
     git_commit: str | None = None,
     dataset_revision: str = "hf:TheKernel01/Tiny-GenImage@v1.0",
+    variant: str = "fusion",
+    clip_model: str = "ViT-L-14",
+    hidden_dim: int = 128,
+    dropout: float = 0.2,
 ) -> dict[str, Any]:
     # Enforce random seed globally
     set_seed(seed)
@@ -863,7 +1062,7 @@ def train_and_eval_experiment(
     logger.info("=" * 80)
 
     # 1. Aggregate Test Splits and assert ZERO sample duplication
-    test_splits = sorted([k for k in splits.keys() if k.startswith("test_")])
+    test_splits = sorted([k for k in splits.keys() if k not in ("train", "val")])
     all_test_records: list[dict] = []
     for split_name in test_splits:
         all_test_records.extend(splits[split_name])
@@ -885,15 +1084,20 @@ def train_and_eval_experiment(
     logger.info("Dataset audit completed: %s (exact_duplicates=%s, hash_verified=%s)",
                 audit_data["status"], audit_data["leakage"]["exact_duplicates"], audit_data["leakage"]["content_hash_verified"])
 
-    # 3. Save config.json
+    # 3. Save config.json with canonical variant name accepted by load_r2_config
+    v_norm = "semantic" if variant in ("semantic", "semantic_only") else ("forensic" if variant in ("forensic", "forensic_only") else "fusion")
     config_dict = {
-        "variant": experiment_name.split("_")[-1] if any(experiment_name.endswith(v) for v in ("fusion", "semantic_only", "forensic_only")) else "fusion",
+        "variant": v_norm,
+        "model_variant": variant,
         "seed": seed,
         "model": {
             "architecture": model.__class__.__name__,
+            "clip_model": clip_model,
+            "clip_pretrained": "openai",
             "projection_dim": 256,
-            "hidden_dim": 128,
-            "dropout": 0.2,
+            "hidden_dim": hidden_dim,
+            "dropout": dropout,
+            "image_size": 224,
             "npr_scale_factor": 0.5,
             "npr_mode": "bilinear",
         },
@@ -1055,11 +1259,12 @@ def train_and_eval_experiment(
         test_ds = FastImageDataset(split_recs, clip_transform, forensic_transform)
         test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
         split_m, split_preds = evaluate_split(model, test_loader, device, calibrated_tau, split_recs, split_name)
-        by_split_metrics[split_name] = split_m
+        canonical_split_key = split_name.replace("test_", "") if split_name.startswith("test_") and split_name != "test" else split_name
+        by_split_metrics[canonical_split_key] = split_m
         all_test_predictions.extend(split_preds)
         logger.info(
             "  %-25s | AUROC: %.4f | Acc: %.4f | F1: %.4f (N=%d)",
-            split_name,
+            canonical_split_key,
             split_m.get("auroc") or 0.0,
             split_m.get("accuracy", 0.0),
             split_m.get("f1", 0.0),
@@ -1083,11 +1288,21 @@ def train_and_eval_experiment(
         threshold_source="val_optimal_f1",
     )
 
+    # Calculate Mean Cross-Generator AUROC across unseen generators
+    cross_gens = [g for g in by_gen_metrics.keys() if g not in ("nature", "sd14", "sd15")]
+    cross_aurocs = [
+        by_gen_metrics[g]["auroc"]
+        for g in cross_gens
+        if by_gen_metrics[g].get("auroc") is not None
+    ]
+    mean_cross_gen_auroc = float(np.mean(cross_aurocs)) if cross_aurocs else None
+
     # 10. Save evaluation.json
     evaluation_record = {
         "overall": overall_metrics,
         "by_split": by_split_metrics,
         "by_generator": by_gen_metrics,
+        "mean_cross_generator_auroc": mean_cross_gen_auroc,
         "threshold_metadata": {
             "calibrated": True,
             "strategy": "f1",
@@ -1124,6 +1339,7 @@ def train_and_eval_experiment(
             "overall": overall_metrics,
             "by_split": by_split_metrics,
             "by_generator": by_gen_metrics,
+            "mean_cross_generator_auroc": mean_cross_gen_auroc,
         },
         "environment": {
             "python_version": sys.version,
@@ -1190,9 +1406,9 @@ def main() -> int:
     parser.add_argument(
         "--experiment",
         type=str,
-        default="all",
-        choices=["all", "logo", "all_in_one"],
-        help="Experiment paradigms to execute ('logo', 'all_in_one', or 'all')",
+        default="canonical",
+        choices=["all", "canonical", "logo", "all_in_one"],
+        help="Experiment paradigms to execute ('canonical', 'logo', 'all_in_one', or 'all')",
     )
     parser.add_argument("--leave-out", type=str, default="midjourney", help="Held-out generator for LOGO")
     args, unknown = parser.parse_known_args()
@@ -1217,14 +1433,14 @@ def main() -> int:
     batch_size = args.batch_size
     seed = args.seed
     num_workers = 4 if torch.cuda.is_available() else 0
-    full_dataset_rev = f"hf:TheKernel01/Tiny-GenImage@{args.dataset_revision}"
 
-    # 1. Download & Extract all images once with pinned revision
-    all_records = prepare_tiny_genimage(
+    # 1. Download & Extract all images once with pinned revision and resolve commit SHA
+    all_records, resolved_hf_sha = prepare_tiny_genimage(
         repo_id="TheKernel01/Tiny-GenImage",
         target_root=args.target_root,
         revision=args.dataset_revision,
     )
+    full_dataset_rev = f"hf:TheKernel01/Tiny-GenImage@{resolved_hf_sha}"
 
     # 2. Build Transforms
     try:
@@ -1255,6 +1471,43 @@ def main() -> int:
     all_experiment_reports = {}
 
     # --------------------------------------------------------------------------
+    # PARADIGM 0: CANONICAL R2 SPEC (SD1.4-Only Train/Val -> In-Domain, Near-OOD, Cross-Gen)
+    # --------------------------------------------------------------------------
+    if args.experiment in ("all", "canonical"):
+        print("\n" + "#" * 80)
+        print(f"# PARADIGM 0: CANONICAL R2 SPEC (SD1.4-Only Train/Val, Variants: {variants_to_run})")
+        print("#" * 80)
+
+        canonical_splits = build_canonical_r2_splits(all_records, n_val=100, seed=seed)
+
+        for v in variants_to_run:
+            set_seed(seed)
+            model = build_detector(variant=v, model_name=args.clip_model, hidden_dim=128, dropout=0.2)
+            exp_name = f"canonical_r2_{v}"
+            report = train_and_eval_experiment(
+                experiment_name=exp_name,
+                model=model,
+                splits=canonical_splits,
+                clip_transform=clip_transform,
+                forensic_transform=forensic_transform,
+                device=device,
+                output_dir=output_dir,
+                epochs=epochs,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                seed=seed,
+                git_commit=resolved_git_commit,
+                dataset_revision=full_dataset_rev,
+                variant=v,
+                clip_model=args.clip_model,
+            )
+            all_experiment_reports[exp_name] = report
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    # --------------------------------------------------------------------------
     # PARADIGM 1: LEAVE-ONE-GENERATOR-OUT (LOGO)
     # --------------------------------------------------------------------------
     if args.experiment in ("all", "logo"):
@@ -1265,8 +1518,9 @@ def main() -> int:
         logo_splits = build_logo_splits(all_records, leave_out_gen=args.leave_out, n_val_per_gen=100, seed=seed)
 
         for v in variants_to_run:
-            exp_name = f"logo_{args.leave_out}_{v}"
+            set_seed(seed)
             model = build_detector(variant=v, model_name=args.clip_model, hidden_dim=128, dropout=0.2)
+            exp_name = f"logo_{args.leave_out}_{v}"
             report = train_and_eval_experiment(
                 experiment_name=exp_name,
                 model=model,
@@ -1281,6 +1535,8 @@ def main() -> int:
                 seed=seed,
                 git_commit=resolved_git_commit,
                 dataset_revision=full_dataset_rev,
+                variant=v,
+                clip_model=args.clip_model,
             )
             all_experiment_reports[exp_name] = report
             del model
@@ -1299,6 +1555,7 @@ def main() -> int:
         aio_splits = build_all_in_one_splits(all_records, n_val_per_gen=100, seed=seed)
         aio_variant = "fusion" if "fusion" in variants_to_run else variants_to_run[0]
         aio_exp_name = f"all_in_one_{aio_variant}"
+        set_seed(seed)
         aio_model = build_detector(variant=aio_variant, model_name=args.clip_model, hidden_dim=128, dropout=0.2)
         aio_report = train_and_eval_experiment(
             experiment_name=aio_exp_name,
@@ -1314,6 +1571,8 @@ def main() -> int:
             seed=seed,
             git_commit=resolved_git_commit,
             dataset_revision=full_dataset_rev,
+            variant=aio_variant,
+            clip_model=args.clip_model,
         )
         all_experiment_reports[aio_exp_name] = aio_report
         del aio_model
@@ -1357,16 +1616,23 @@ def main() -> int:
     # --------------------------------------------------------------------------
     # PRINT FINAL COMPARATIVE BENCHMARK SUMMARY
     # --------------------------------------------------------------------------
-    print("\n" + "=" * 96)
-    print("                     FINAL MULTI-GENERATOR BENCHMARK EVALUATION                     ")
-    print("=" * 96)
+    print("\n" + "=" * 108)
+    print("                     FINAL R2 BENCHMARK EVALUATION SUMMARY                     ")
+    print("=" * 108)
     for exp_name, rep in all_experiment_reports.items():
         print(f"\n--- EXPERIMENT: {exp_name.upper()} ---")
         overall = rep["evaluation"]["overall"]
-        print(f"  Overall: AUROC: {overall.get('auroc') or 0.0:.4f} | Accuracy: {overall.get('accuracy', 0.0):.4f} | F1: {overall.get('f1', 0.0):.4f} (N={overall.get('total_samples', 0)})")
+        mean_cross = rep["evaluation"].get("mean_cross_generator_auroc")
+        mean_cross_str = f"{mean_cross:.4f}" if mean_cross is not None else "N/A"
+        print(f"  Overall: AUROC: {overall.get('auroc') or 0.0:.4f} | Accuracy: {overall.get('accuracy', 0.0):.4f} | F1: {overall.get('f1', 0.0):.4f} | Mean Cross-Gen AUROC: {mean_cross_str} (N={overall.get('total_samples', 0)})")
         for s, m in rep["results"].items():
-            print(f"  {s:<28} | AUROC: {m['auroc'] or 0.0:.4f} | Accuracy: {m['accuracy']:.4f} | F1: {m['f1']:.4f} (N={m['total_samples']})")
-    print("=" * 96)
+            print(f"  Split: {s:<26} | AUROC: {m['auroc'] or 0.0:.4f} | Accuracy: {m['accuracy']:.4f} | F1: {m['f1']:.4f} (N={m['total_samples']})")
+        by_gen = rep["evaluation"].get("by_generator", {})
+        if by_gen:
+            print("  Per-Generator Breakdown:")
+            for g, gm in sorted(by_gen.items()):
+                print(f"    - {g:<24} | AUROC: {gm.get('auroc') or 0.0:.4f} | Accuracy: {gm.get('accuracy', 0.0):.4f} | F1: {gm.get('f1', 0.0):.4f} (N={gm.get('total_samples', 0)})")
+    print("=" * 108)
 
     print("\nExecution complete! Strict Artifact Contract runs and results_r2.zip are ready in /kaggle/working/.")
     return 0

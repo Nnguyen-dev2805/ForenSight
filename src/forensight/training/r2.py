@@ -24,7 +24,7 @@ from forensight.models.fusion import FusionDetector
 from forensight.models.semantic import SemanticOnlyDetector, load_open_clip_semantic
 
 
-VALID_VARIANTS = {"semantic", "forensic", "fusion"}
+VALID_VARIANTS = {"semantic", "forensic", "fusion", "semantic_only", "forensic_only", "concat_fusion"}
 REQUIRED_CONFIG_SECTIONS = {"model", "training", "evaluation"}
 
 
@@ -102,7 +102,13 @@ def load_r2_config(path: str | Path) -> dict[str, Any]:
         config = json.load(f)
 
     variant = config.get("variant")
-    if variant not in VALID_VARIANTS:
+    if variant in {"semantic", "semantic_only"}:
+        config["variant"] = "semantic"
+    elif variant in {"forensic", "forensic_only"}:
+        config["variant"] = "forensic"
+    elif variant in {"fusion", "concat_fusion"}:
+        config["variant"] = "fusion"
+    elif variant not in VALID_VARIANTS:
         raise ValueError(
             f"Unsupported R2 variant: {variant!r}. Must be one of {sorted(VALID_VARIANTS)}"
         )

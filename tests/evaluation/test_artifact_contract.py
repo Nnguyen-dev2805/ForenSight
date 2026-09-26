@@ -58,9 +58,10 @@ def validate_run_artifact_contract(run_dir: str | Path) -> dict[str, Any]:
         assert fpath.stat().st_size > 0, f"Artifact '{fname}' is empty in {directory}"
 
     # 1. config.json
-    with (directory / "config.json").open("r", encoding="utf-8") as f:
-        config = json.load(f)
+    from forensight.training.r2 import load_r2_config
+    config = load_r2_config(directory / "config.json")
     assert isinstance(config, dict)
+    assert config["variant"] in ("semantic", "forensic", "fusion")
     assert "model" in config
     assert "training" in config
     assert "evaluation" in config
@@ -310,10 +311,24 @@ def test_kaggle_runner_artifact_contract(tmp_path: Path):
                     "content_hash": hashlib.sha256(raw_bytes).hexdigest(),
                 })
 
+    # Test Canonical R2 splits (docs/plans/r2-forensic-perception-v1.md)
+    from deploy.kaggle.main import build_canonical_r2_splits
+    canonical_splits = build_canonical_r2_splits(records, n_val=2, seed=42)
+    assert "train" in canonical_splits
+    assert "val" in canonical_splits
+    assert "in_domain_test" in canonical_splits
+    assert "near_ood" in canonical_splits
+    assert "cross_generator_ood" in canonical_splits
+
+    # All test samples in canonical splits must be completely disjoint
+    all_test_canonical = canonical_splits["in_domain_test"] + canonical_splits["near_ood"] + canonical_splits["cross_generator_ood"]
+    canonical_test_ids = [r["sample_id"] for r in all_test_canonical]
+    assert len(canonical_test_ids) == len(set(canonical_test_ids)), "Canonical test splits contain duplicate samples!"
+
     # Test LOGO splits
     logo_splits = build_logo_splits(records, leave_out_gen="midjourney", n_val_per_gen=2, seed=42)
-    assert "test_cross_generator_ood" in logo_splits
-    assert "test_in_domain_seen" in logo_splits
+    assert "cross_generator_ood" in logo_splits
+    assert "in_domain_test" in logo_splits
 
     # Test All-In-One splits (MUST NOT have duplicate test samples)
     aio_splits = build_all_in_one_splits(records, n_val_per_gen=2, seed=42)
@@ -329,39 +344,87 @@ def test_kaggle_runner_artifact_contract(tmp_path: Path):
             super().__init__()
             self.linear = torch.nn.Linear(1, 1)
 
-        def forward(self, clip_img, foren_img):
-            return self.linear(clip_img[:, :1, 0, 0])
+        def forward(self, clip_img=None, foren_img=None):
+            feat = clip_img[:, :1, 0, 0] if clip_img is not None else foren_img[:, :1, 0, 0]
+            return self.linear(feat)
 
     t = transforms.ToTensor()
-    res = train_and_eval_experiment(
-        experiment_name="logo_midjourney_fusion",
-        model=DummyModel(),
-        splits=logo_splits,
-        clip_transform=t,
-        forensic_transform=t,
-        device=torch.device("cpu"),
-        output_dir=tmp_path,
-        epochs=1,
-        batch_size=2,
-        num_workers=0,
-        seed=42,
-        git_commit="test_commit_sha",
-    )
 
-    exp_run_dir = tmp_path / "results" / "r2" / "logo_midjourney_fusion" / "seed_42"
-    result = validate_run_artifact_contract(exp_run_dir)
-    assert result["status"] == "VALID"
-    assert result["epochs"] == 1
+    # Verify all 3 variants with canonical R2 splits produce valid Artifact Contract outputs
+    for v in ["semantic_only", "forensic_only", "fusion"]:
+        exp_name = f"canonical_r2_{v}"
+        train_and_eval_experiment(
+            experiment_name=exp_name,
+            model=DummyModel(),
+            splits=canonical_splits,
+            clip_transform=t,
+            forensic_transform=t,
+            device=torch.device("cpu"),
+            output_dir=tmp_path,
+            epochs=1,
+            batch_size=2,
+            num_workers=0,
+            seed=42,
+            git_commit="test_commit_sha",
+            variant=v,
+        )
 
-    # Verify manifest splits are proper canonical names
-    test_manifest = Manifest.from_jsonl(exp_run_dir / "test_manifest.jsonl")
-    splits_present = {r.split for r in test_manifest}
-    assert "cross_generator_ood" in splits_present or "in_domain_test" in splits_present
+        exp_run_dir = tmp_path / "results" / "r2" / exp_name / "seed_42"
+        result = validate_run_artifact_contract(exp_run_dir)
+        assert result["status"] == "VALID"
+        assert result["epochs"] == 1
+
+        # Verify predictions.jsonl vocabulary matches manifest
+        with (exp_run_dir / "predictions.jsonl").open("r", encoding="utf-8") as f:
+            for line in f:
+                rec = json.loads(line)
+                assert rec["split"] in ("in_domain_test", "near_ood", "cross_generator_ood")
 
     # Test zip packaging
     zip_path = tmp_path / "results_r2.zip"
     zip_results(tmp_path / "results", zip_path)
     assert zip_path.exists() and zip_path.stat().st_size > 0
+
+
+def test_kaggle_seed_isolation(tmp_path: Path):
+    """Verify that model weights are deterministic whether run alone or as part of a suite."""
+    from deploy.kaggle.main import build_detector, set_seed
+
+    # Run in isolation
+    set_seed(42)
+    m_isolated = build_detector("fusion", model_name="ViT-B-32", pretrained="", hidden_dim=64, dropout=0.1)
+
+    # Run after other variants consume RNG
+    set_seed(42)
+    _ = build_detector("semantic_only", model_name="ViT-B-32", pretrained="", hidden_dim=64, dropout=0.1)
+    # Simulate RNG consumption
+    _ = torch.randn(100, 100)
+
+    set_seed(42)
+    _ = build_detector("forensic_only", hidden_dim=64, dropout=0.1)
+    _ = torch.randn(100, 100)
+
+    set_seed(42)
+    m_suite = build_detector("fusion", model_name="ViT-B-32", pretrained="", hidden_dim=64, dropout=0.1)
+
+    for p1, p2 in zip(m_isolated.classifier.parameters(), m_suite.classifier.parameters()):
+        assert torch.equal(p1, p2), "Model parameters differ! Seed isolation failed."
+
+
+def test_kaggle_threshold_reproducibility():
+    """Verify deploy/kaggle/main.py select_threshold matches R0 select_threshold exactly."""
+    import numpy as np
+    from deploy.kaggle.main import select_threshold as kaggle_select_threshold
+    from forensight.evaluation.metrics import select_threshold as r0_select_threshold
+
+    rng = np.random.RandomState(42)
+    y_true = rng.randint(0, 2, size=100)
+    y_scores = rng.uniform(0.1, 0.9, size=100)
+
+    for strat in ["f1", "accuracy", "youden"]:
+        t_kaggle = kaggle_select_threshold(y_true, y_scores, strategy=strat)
+        t_r0 = r0_select_threshold(y_true, y_scores, strategy=strat)
+        assert np.isclose(t_kaggle, t_r0, atol=1e-6), f"Threshold mismatch for strategy '{strat}': {t_kaggle} != {t_r0}"
 
 
 def test_kaggle_seed_control(tmp_path: Path):
@@ -393,3 +456,16 @@ def test_kaggle_seed_control(tmp_path: Path):
     order_42 = [r["sample_id"] for r in splits_42["train"]]
     order_99 = [r["sample_id"] for r in splits_99["train"]]
     assert order_42 != order_99, "Different seeds must produce different shuffle ordering!"
+
+
+def test_kaggle_git_provenance():
+    """Verify get_git_commit_sha() returns the live git commit when running inside repository."""
+    import subprocess
+    from deploy.kaggle.main import get_git_commit_sha
+
+    sha = get_git_commit_sha()
+    assert sha != "unversioned_kaggle_run"
+    assert len(sha) == 40
+
+    expected = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    assert sha == expected
