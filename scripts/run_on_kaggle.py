@@ -63,6 +63,11 @@ def push_kernel(kernel_dir: str | Path, config: dict | None = None) -> bool:
         git_sha = git_res.stdout.strip() or "unversioned"
     except Exception:
         git_sha = "unversioned"
+
+    merged_config: dict[str, Any] = {"git_commit": git_sha}
+    if config:
+        merged_config.update(config)
+
     commit_file = kernel_path / "commit_info.json"
     with open(commit_file, "w", encoding="utf-8") as f:
         json.dump(
@@ -73,21 +78,32 @@ def push_kernel(kernel_dir: str | Path, config: dict | None = None) -> bool:
             f,
             indent=2,
         )
-    logger.info("Injected provenance git commit '%s' into %s", git_sha, commit_file)
 
-    if config:
-        config_file = kernel_path / "run_config.json"
-        with open(config_file, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
-        logger.info("Injected run config %s into %s", config, config_file)
+    config_file = kernel_path / "run_config.json"
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(merged_config, f, indent=2)
 
-    cmd = get_kaggle_cmd() + ["kernels", "push", "-p", str(kernel_dir)]
-    logger.info("Pushing kernel to Kaggle: %s", " ".join(cmd))
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    print(res.stdout)
-    if res.stderr:
-        print(res.stderr, file=sys.stderr)
-    return res.returncode == 0
+    logger.info("Injected provenance git commit '%s' and config: %s", git_sha, merged_config)
+
+    main_py = kernel_path / "main.py"
+    orig_code = main_py.read_text(encoding="utf-8")
+    injected_code_str = f"INJECTED_CONFIG: dict[str, Any] = {json.dumps(merged_config, indent=4)}"
+    if "INJECTED_CONFIG: dict[str, Any] = {}" in orig_code:
+        modified_code = orig_code.replace("INJECTED_CONFIG: dict[str, Any] = {}", injected_code_str, 1)
+    else:
+        modified_code = orig_code
+
+    try:
+        main_py.write_text(modified_code, encoding="utf-8")
+        cmd = get_kaggle_cmd() + ["kernels", "push", "-p", str(kernel_dir)]
+        logger.info("Pushing kernel to Kaggle: %s", " ".join(cmd))
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        print(res.stdout)
+        if res.stderr:
+            print(res.stderr, file=sys.stderr)
+        return res.returncode == 0
+    finally:
+        main_py.write_text(orig_code, encoding="utf-8")
 
 
 def get_status(kernel_slug: str) -> str:

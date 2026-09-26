@@ -34,6 +34,9 @@ import time
 from typing import Any
 import zipfile
 
+# Injected runtime configuration (dynamically populated during push if specified)
+INJECTED_CONFIG: dict[str, Any] = {}
+
 # Ensure required packages are present on Kaggle environment
 REQUIRED_PACKAGES = {
     "open_clip": "open_clip_torch",
@@ -415,12 +418,13 @@ def build_canonical_r2_splits(
     train_reals = [r for r in records if r["raw_split"] == "train" and r["label"] == 0]
     val_reals = [r for r in records if r["raw_split"] == "validation" and r["label"] == 0]
 
-    # 1. Train split: SD1.4 only
-    sd14_train_fakes = [
-        r for r in records if r["raw_split"] == "train" and r["generator"] == "sd14" and r["label"] == 1
+    # 1. Train split: SD1.4 (or SD1.5 fallback if SD1.4 is absent in dataset)
+    sd_train_gen = "sd14" if any(r["generator"] == "sd14" for r in records) else "sd15"
+    sd_train_fakes = [
+        r for r in records if r["raw_split"] == "train" and r["generator"] == sd_train_gen and r["label"] == 1
     ]
-    n_train = min(len(sd14_train_fakes), len(train_reals))
-    selected_train_fakes = [copy.deepcopy(x) for x in sd14_train_fakes[:n_train]]
+    n_train = min(len(sd_train_fakes), len(train_reals))
+    selected_train_fakes = [copy.deepcopy(x) for x in sd_train_fakes[:n_train]]
     selected_train_reals = [copy.deepcopy(x) for x in train_reals[:n_train]]
     train_set = selected_train_fakes + selected_train_reals
     rng.shuffle(train_set)
@@ -444,12 +448,12 @@ def build_canonical_r2_splits(
             alloc.extend([copy.deepcopy(x) for x in unused_train[:needed]])
         return alloc
 
-    # 3. Val split: SD1.4 val fakes (n_val) + equal reals
-    sd14_val_fakes = [
-        r for r in records if r["raw_split"] == "validation" and r["generator"] == "sd14" and r["label"] == 1
+    # 3. Val split: SD train gen val fakes (n_val) + equal reals
+    sd_val_fakes = [
+        r for r in records if r["raw_split"] == "validation" and r["generator"] == sd_train_gen and r["label"] == 1
     ]
-    n_val_actual = min(n_val, len(sd14_val_fakes) // 2) if len(sd14_val_fakes) >= 2 else len(sd14_val_fakes)
-    cur_val_fakes = [copy.deepcopy(x) for x in sd14_val_fakes[:n_val_actual]]
+    n_val_actual = min(n_val, len(sd_val_fakes) // 2) if len(sd_val_fakes) >= 2 else len(sd_val_fakes)
+    cur_val_fakes = [copy.deepcopy(x) for x in sd_val_fakes[:n_val_actual]]
     cur_val_reals = allocate_reals(len(cur_val_fakes))
     if len(cur_val_reals) < len(cur_val_fakes):
         cur_val_fakes = cur_val_fakes[:len(cur_val_reals)]
@@ -457,27 +461,30 @@ def build_canonical_r2_splits(
     for r in val_set:
         r["split"] = "val"
 
-    # 4. In-domain test split: remaining SD1.4 val fakes + equal reals
-    remaining_sd14_fakes = [copy.deepcopy(x) for x in sd14_val_fakes[n_val_actual:]]
-    cur_in_domain_reals = allocate_reals(len(remaining_sd14_fakes))
-    if len(cur_in_domain_reals) < len(remaining_sd14_fakes):
-        remaining_sd14_fakes = remaining_sd14_fakes[:len(cur_in_domain_reals)]
-    in_domain_test_set = remaining_sd14_fakes + cur_in_domain_reals
+    # 4. In-domain test split: remaining SD train gen val fakes + equal reals
+    remaining_sd_fakes = [copy.deepcopy(x) for x in sd_val_fakes[n_val_actual:]]
+    cur_in_domain_reals = allocate_reals(len(remaining_sd_fakes))
+    if len(cur_in_domain_reals) < len(remaining_sd_fakes):
+        remaining_sd_fakes = remaining_sd_fakes[:len(cur_in_domain_reals)]
+    in_domain_test_set = remaining_sd_fakes + cur_in_domain_reals
     for r in in_domain_test_set:
         r["split"] = "in_domain_test"
         r["eval_slice"] = "in_domain_test"
 
-    # 5. Near-OOD test split: SD1.5 fakes + equal reals
-    sd15_fakes = [
-        copy.deepcopy(r) for r in records if r["generator"] == "sd15" and r["label"] == 1
+    # 5. Near-OOD test split: SD1.5 (if trained on SD1.4) or SD1.4 (if trained on SD1.5)
+    near_ood_gen = "sd15" if sd_train_gen == "sd14" else "sd14"
+    near_ood_fakes = [
+        copy.deepcopy(r) for r in records if r["generator"] == near_ood_gen and r["label"] == 1
     ]
-    cur_near_ood_reals = allocate_reals(len(sd15_fakes))
-    if len(cur_near_ood_reals) < len(sd15_fakes):
-        sd15_fakes = sd15_fakes[:len(cur_near_ood_reals)]
-    near_ood_test_set = sd15_fakes + cur_near_ood_reals
-    for r in near_ood_test_set:
-        r["split"] = "near_ood"
-        r["eval_slice"] = "near_ood"
+    near_ood_test_set: list[dict] = []
+    if near_ood_fakes:
+        cur_near_ood_reals = allocate_reals(len(near_ood_fakes))
+        if len(cur_near_ood_reals) < len(near_ood_fakes):
+            near_ood_fakes = near_ood_fakes[:len(cur_near_ood_reals)]
+        near_ood_test_set = near_ood_fakes + cur_near_ood_reals
+        for r in near_ood_test_set:
+            r["split"] = "near_ood"
+            r["eval_slice"] = "near_ood"
 
     # 6. Cross-generator OOD test split: unseen generators (Midjourney, ADM, BigGAN, GLIDE, VQDM)
     cross_fakes = [
@@ -1075,7 +1082,13 @@ def save_predictions_jsonl(predictions: list[dict], path: Path) -> None:
 
 
 def get_git_commit_sha() -> str:
-    """Resolve genuine git commit provenance: local git HEAD, commit_info.json, or env var."""
+    """Resolve genuine git commit provenance: INJECTED_CONFIG, local git HEAD, commit_info.json, or env var."""
+    # 0. Check INJECTED_CONFIG first (dynamically injected into script before pushing to Kaggle)
+    if INJECTED_CONFIG.get("git_commit"):
+        sha = str(INJECTED_CONFIG["git_commit"]).strip()
+        if sha and sha != "unversioned":
+            return sha
+
     # 1. Live git repository has ultimate authority when available
     try:
         res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
@@ -1571,6 +1584,11 @@ def main() -> int:
             logger.info("Loaded run configuration overrides from %s: %s", run_config_path.name, cfg_overrides)
         except Exception as e:
             logger.warning("Could not read run_config.json: %s", e)
+
+    # Apply directly injected config dictionary (highest precedence for Kaggle standalone scripts)
+    if INJECTED_CONFIG:
+        parser.set_defaults(**INJECTED_CONFIG)
+        logger.info("Loaded INJECTED_CONFIG runtime overrides: %s", INJECTED_CONFIG)
 
     args, unknown = parser.parse_known_args()
 

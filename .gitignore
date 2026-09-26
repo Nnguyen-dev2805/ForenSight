@@ -39,3 +39,7 @@ data/derived/*
 # Generated experiment outputs
 results/*
 !results/.gitkeep
+
+# Kaggle deployment generated state
+deploy/kaggle/run_config.json
+deploy/kaggle/commit_info.json
