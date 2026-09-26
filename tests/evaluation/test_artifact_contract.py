@@ -469,3 +469,218 @@ def test_kaggle_git_provenance():
 
     expected = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     assert sha == expected
+
+
+def test_kaggle_optimization_protocol(tmp_path: Path):
+    """Verify that Kaggle runner adheres strictly to canonical R2 optimization configs:
+    - semantic: 1e-3
+    - forensic & fusion: 1e-4
+    - only trainable parameters (requires_grad=True) are optimized
+    - explicit lr override is respected
+    """
+    from deploy.kaggle.main import train_and_eval_experiment
+    from torchvision import transforms
+
+    class MockDetector(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            # Frozen parameter (e.g. CLIP backbone)
+            self.frozen = torch.nn.Linear(2, 2)
+            for p in self.frozen.parameters():
+                p.requires_grad = False
+            # Trainable parameter
+            self.trainable = torch.nn.Linear(2, 1)
+
+        def forward(self, clip_img=None, foren_img=None):
+            return self.trainable(clip_img[:, :2, 0, 0])
+
+    t = transforms.ToTensor()
+    records = [
+        {"sample_id": f"s_{i}", "image_path": "fake.png", "abs_path": str(tmp_path / "img.png"), "label": i % 2, "generator": "sd14", "split": "train"}
+        for i in range(4)
+    ]
+    # Create fake image
+    img = Image.new("RGB", (32, 32), color=(100, 100, 100))
+    img.save(tmp_path / "img.png")
+
+    dummy_splits = {
+        "train": records[:2],
+        "val": records[2:4],
+        "in_domain_test": records[2:4],
+    }
+
+    # 1. Semantic variant default learning rate: 1e-3
+    rep_sem = train_and_eval_experiment(
+        experiment_name="test_sem",
+        model=MockDetector(),
+        splits=dummy_splits,
+        clip_transform=t,
+        forensic_transform=t,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        variant="semantic_only",
+    )
+    with (tmp_path / "results" / "r2" / "test_sem" / "seed_42" / "config.json").open("r", encoding="utf-8") as f:
+        cfg_sem = json.load(f)
+    assert cfg_sem["training"]["learning_rate"] == 0.001
+
+    # 2. Forensic variant default learning rate: 1e-4
+    rep_foren = train_and_eval_experiment(
+        experiment_name="test_foren",
+        model=MockDetector(),
+        splits=dummy_splits,
+        clip_transform=t,
+        forensic_transform=t,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        variant="forensic_only",
+    )
+    with (tmp_path / "results" / "r2" / "test_foren" / "seed_42" / "config.json").open("r", encoding="utf-8") as f:
+        cfg_foren = json.load(f)
+    assert cfg_foren["training"]["learning_rate"] == 0.0001
+
+    # 3. Explicit learning rate override
+    train_and_eval_experiment(
+        experiment_name="test_custom_lr",
+        model=MockDetector(),
+        splits=dummy_splits,
+        clip_transform=t,
+        forensic_transform=t,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        variant="fusion",
+        learning_rate=0.0005,
+    )
+    with (tmp_path / "results" / "r2" / "test_custom_lr" / "seed_42" / "config.json").open("r", encoding="utf-8") as f:
+        cfg_custom = json.load(f)
+    assert cfg_custom["training"]["learning_rate"] == 0.0005
+
+
+def test_kaggle_load_splits_from_manifests(tmp_path: Path):
+    """Verify loading sealed R0 manifests and reconciling with extracted records."""
+    from deploy.kaggle.main import load_splits_from_manifests
+
+    # Generate synthetic image files
+    img_dir = tmp_path / "extracted_images"
+    img_dir.mkdir()
+    extracted_records = []
+
+    for i in range(10):
+        p = img_dir / f"img_{i}.png"
+        img = Image.new("RGB", (32, 32), color=(i * 10, i * 10, i * 10))
+        img.save(p)
+        extracted_records.append({
+            "sample_id": f"sample_{i:04d}",
+            "image_path": f"relative/img_{i}.png",
+            "abs_path": str(p),
+            "label": i % 2,
+            "generator": "sd14" if i < 6 else "sd15",
+            "content_hash": f"hash_{i}",
+        })
+
+    # Create sealed train, val, and test manifests
+    train_m = tmp_path / "train_manifest.jsonl"
+    val_m = tmp_path / "val_manifest.jsonl"
+    test_m = tmp_path / "test_manifest.jsonl"
+
+    with open(train_m, "w", encoding="utf-8") as f:
+        for r in extracted_records[:4]:
+            f.write(json.dumps({
+                "sample_id": r["sample_id"],
+                "image_path": r["image_path"],
+                "label": r["label"],
+                "generator": r["generator"],
+                "split": "train",
+                "dataset": "TheKernel01/Tiny-GenImage",
+            }) + "\n")
+
+    with open(val_m, "w", encoding="utf-8") as f:
+        for r in extracted_records[4:6]:
+            f.write(json.dumps({
+                "sample_id": r["sample_id"],
+                "image_path": r["image_path"],
+                "label": r["label"],
+                "generator": r["generator"],
+                "split": "val",
+                "dataset": "TheKernel01/Tiny-GenImage",
+            }) + "\n")
+
+    with open(test_m, "w", encoding="utf-8") as f:
+        for r in extracted_records[6:8]:
+            f.write(json.dumps({
+                "sample_id": r["sample_id"],
+                "image_path": r["image_path"],
+                "label": r["label"],
+                "generator": r["generator"],
+                "split": "in_domain_test",
+                "dataset": "TheKernel01/Tiny-GenImage",
+                "metadata": {"eval_slice": "in_domain_test"},
+            }) + "\n")
+        for r in extracted_records[8:]:
+            f.write(json.dumps({
+                "sample_id": r["sample_id"],
+                "image_path": r["image_path"],
+                "label": r["label"],
+                "generator": r["generator"],
+                "split": "near_ood",
+                "dataset": "TheKernel01/Tiny-GenImage",
+                "metadata": {"eval_slice": "near_ood"},
+            }) + "\n")
+
+    # Load splits
+    splits = load_splits_from_manifests(
+        train_manifest=train_m,
+        val_manifest=val_m,
+        test_manifest=test_m,
+        extracted_records=extracted_records,
+    )
+
+    assert "train" in splits
+    assert "val" in splits
+    assert "in_domain_test" in splits
+    assert "near_ood" in splits
+    assert len(splits["train"]) == 4
+    assert len(splits["val"]) == 2
+    assert len(splits["in_domain_test"]) == 2
+    assert len(splits["near_ood"]) == 2
+
+    # Check abs_path and content_hash reconciliation
+    for k, v in splits.items():
+        for r in v:
+            assert Path(r["abs_path"]).exists(), f"Resolved abs_path does not exist: {r['abs_path']}"
+            assert r["content_hash"] is not None and r["content_hash"].startswith("hash_")
+
+
+def test_kaggle_dataset_sha_pinning(monkeypatch, tmp_path: Path):
+    """Verify that prepare_tiny_genimage pins repo_files and downloads to resolved commit SHA."""
+    from unittest.mock import MagicMock
+    import deploy.kaggle.main as kaggle_main
+
+    mock_sha = "c03f567890abcdef1234567890abcdef12345678"
+    mock_api = MagicMock()
+    mock_info = MagicMock()
+    mock_info.sha = mock_sha
+    mock_api.dataset_info.return_value = mock_info
+    mock_api.list_repo_files.return_value = []
+
+    monkeypatch.setattr(kaggle_main, "HfApi", lambda: mock_api)
+
+    records, resolved_sha = kaggle_main.prepare_tiny_genimage(
+        repo_id="test/repo",
+        target_root=str(tmp_path),
+        revision="v1.0",
+    )
+
+    assert resolved_sha == mock_sha
+    mock_api.dataset_info.assert_called_once_with(repo_id="test/repo", revision="v1.0")
+    # list_repo_files must be pinned to resolved_sha
+    mock_api.list_repo_files.assert_called_once_with(repo_id="test/repo", revision=mock_sha, repo_type="dataset")

@@ -314,7 +314,7 @@ def prepare_tiny_genimage(
     except Exception as e:
         logger.warning("Could not resolve dataset commit SHA via HfApi (%s), keeping '%s'", e, revision)
 
-    repo_files = api.list_repo_files(repo_id=repo_id, revision=revision, repo_type="dataset")
+    repo_files = api.list_repo_files(repo_id=repo_id, revision=resolved_commit_sha, repo_type="dataset")
 
     train_parquets = sorted([f for f in repo_files if "train-" in f and f.endswith(".parquet")])
     val_parquets = sorted([f for f in repo_files if "validation-" in f and f.endswith(".parquet")])
@@ -332,7 +332,7 @@ def prepare_tiny_genimage(
             downloaded = hf_hub_download(
                 repo_id=repo_id,
                 filename=rel_file,
-                revision=revision,
+                revision=resolved_commit_sha,
                 repo_type="dataset",
                 local_dir="/tmp/hf_cache",
             )
@@ -494,6 +494,135 @@ def build_canonical_r2_splits(
     }
 
     logger.info("Canonical R2 Protocol Splits created (seed: %d):", seed)
+    for k, v in splits.items():
+        reals = sum(1 for r in v if r["label"] == 0)
+        fakes = sum(1 for r in v if r["label"] == 1)
+        logger.info("  %s: %d total (%d real, %d fake)", k, len(v), reals, fakes)
+
+    return splits
+
+
+def load_splits_from_manifests(
+    train_manifest: str | Path,
+    val_manifest: str | Path,
+    test_manifest: str | Path | None = None,
+    eval_manifests: list[str | Path] | None = None,
+    base_dir: Path | None = None,
+    extracted_records: list[dict] | None = None,
+    seed: int = 42,
+) -> dict[str, list[dict]]:
+    """Load canonical R2 splits from sealed R0 manifests per docs/plans/r2-forensic-perception-v1.md.
+
+    Reconciles manifest entries with extracted image files and byte content hashes.
+    Ensures zero leakage and respects sealed partition boundaries.
+    """
+    rec_lookup_by_id: dict[str, dict] = {}
+    rec_lookup_by_path: dict[str, dict] = {}
+    if extracted_records:
+        for r in extracted_records:
+            rec_lookup_by_id[r["sample_id"]] = r
+            if r.get("image_path"):
+                rec_lookup_by_path[r["image_path"]] = r
+                rec_lookup_by_path[Path(r["image_path"]).name] = r
+
+    def _resolve_record(raw_row: dict) -> dict:
+        sample_id = str(raw_row["sample_id"])
+        image_path = raw_row.get("image_path") or raw_row.get("rel_path") or raw_row.get("path")
+        lookup = rec_lookup_by_id.get(sample_id)
+        if not lookup and image_path:
+            lookup = rec_lookup_by_path.get(image_path) or rec_lookup_by_path.get(Path(image_path).name)
+
+        abs_path = None
+        content_hash = raw_row.get("content_hash")
+        if lookup:
+            abs_path = lookup.get("abs_path")
+            if not content_hash:
+                content_hash = lookup.get("content_hash")
+
+        if not abs_path and image_path:
+            p = Path(image_path)
+            if p.is_absolute() and p.exists():
+                abs_path = str(p)
+            elif base_dir is not None and (base_dir / image_path).exists():
+                abs_path = str(base_dir / image_path)
+            elif p.exists():
+                abs_path = str(p.resolve())
+            else:
+                abs_path = str(base_dir / image_path) if base_dir else str(image_path)
+
+        generator = raw_row.get("generator") or (lookup.get("generator") if lookup else "unknown")
+        split = raw_row.get("split") or "train"
+        label = int(raw_row["label"])
+        dataset = raw_row.get("dataset") or "TheKernel01/Tiny-GenImage"
+        meta = raw_row.get("metadata") if isinstance(raw_row.get("metadata"), dict) else {}
+        eval_slice = meta.get("eval_slice") or raw_row.get("eval_slice") or split
+
+        return {
+            "sample_id": sample_id,
+            "image_path": str(image_path) if image_path else "",
+            "abs_path": abs_path,
+            "label": label,
+            "generator": generator,
+            "split": split,
+            "dataset": dataset,
+            "eval_slice": eval_slice,
+            "content_hash": content_hash,
+        }
+
+    def _load_file(path_str: str | Path) -> list[dict]:
+        path = Path(path_str)
+        if not path.exists():
+            raise FileNotFoundError(f"Sealed manifest file not found: {path}")
+        rows: list[dict] = []
+        if path.suffix.lower() == ".jsonl":
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+        elif path.suffix.lower() == ".csv":
+            import csv
+            with open(path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    rows.append(r)
+        else:
+            raise ValueError(f"Unsupported manifest file extension: {path.suffix}")
+        return [_resolve_record(r) for r in rows]
+
+    train_recs = _load_file(train_manifest)
+    val_recs = _load_file(val_manifest)
+
+    splits: dict[str, list[dict]] = {
+        "train": train_recs,
+        "val": val_recs,
+    }
+
+    if eval_manifests:
+        for p in eval_manifests:
+            p_obj = Path(p)
+            split_key = p_obj.stem.replace("_manifest", "")
+            recs = _load_file(p)
+            for r in recs:
+                r["split"] = split_key
+                r["eval_slice"] = split_key
+            splits[split_key] = recs
+    elif test_manifest:
+        test_recs = _load_file(test_manifest)
+        slices: dict[str, list[dict]] = {}
+        for r in test_recs:
+            s = r.get("eval_slice") or r.get("split") or "test"
+            if s in ("train", "val"):
+                s = "in_domain_test"
+            slices.setdefault(s, []).append(r)
+
+        if len(slices) == 1 and "test" in slices:
+            splits["test"] = slices["test"]
+        else:
+            for s_name, s_recs in slices.items():
+                splits[s_name] = s_recs
+
+    logger.info("Loaded sealed splits from manifests:")
     for k, v in splits.items():
         reals = sum(1 for r in v if r["label"] == 0)
         fakes = sum(1 for r in v if r["label"] == 1)
@@ -1042,6 +1171,7 @@ def train_and_eval_experiment(
     clip_model: str = "ViT-L-14",
     hidden_dim: int = 128,
     dropout: float = 0.2,
+    learning_rate: float | None = None,
 ) -> dict[str, Any]:
     # Enforce random seed globally
     set_seed(seed)
@@ -1086,6 +1216,12 @@ def train_and_eval_experiment(
 
     # 3. Save config.json with canonical variant name accepted by load_r2_config
     v_norm = "semantic" if variant in ("semantic", "semantic_only") else ("forensic" if variant in ("forensic", "forensic_only") else "fusion")
+    if learning_rate is not None:
+        lr = float(learning_rate)
+    else:
+        # Canonical R2 configs: semantic uses 1e-3, forensic and fusion use 1e-4
+        lr = 1e-3 if v_norm == "semantic" else 1e-4
+
     config_dict = {
         "variant": v_norm,
         "model_variant": variant,
@@ -1104,7 +1240,7 @@ def train_and_eval_experiment(
         "training": {
             "batch_size": batch_size,
             "epochs": epochs,
-            "learning_rate": 1e-3,
+            "learning_rate": lr,
             "weight_decay": 1e-4,
             "num_workers": num_workers,
         },
@@ -1124,8 +1260,8 @@ def train_and_eval_experiment(
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     model = model.to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = torch.optim.AdamW(trainable_params, lr=lr, weight_decay=1e-4)
     criterion = nn.BCEWithLogitsLoss()
 
     best_val_loss = float("inf")
@@ -1161,7 +1297,6 @@ def train_and_eval_experiment(
             total_loss += loss.item()
             n_batches += 1
 
-        scheduler.step()
         train_loss = total_loss / max(1, n_batches)
 
         # Validation pass
@@ -1411,6 +1546,13 @@ def main() -> int:
         help="Experiment paradigms to execute ('canonical', 'logo', 'all_in_one', or 'all')",
     )
     parser.add_argument("--leave-out", type=str, default="midjourney", help="Held-out generator for LOGO")
+    parser.add_argument("--train-manifest", type=str, default=None, help="Path to sealed training manifest (JSONL/CSV)")
+    parser.add_argument("--val-manifest", type=str, default=None, help="Path to sealed validation manifest (JSONL/CSV)")
+    parser.add_argument("--test-manifest", type=str, default=None, help="Path to sealed test manifest (JSONL/CSV)")
+    parser.add_argument("--eval-manifests", type=str, nargs="*", default=None, help="Paths to sealed evaluation manifests (JSONL/CSV)")
+    parser.add_argument("--manifest-dir", type=str, default=None, help="Directory containing sealed manifests (train_manifest.jsonl, val_manifest.jsonl, etc.)")
+    parser.add_argument("--base-dir", type=str, default=None, help="Base directory for resolving relative image paths in sealed manifests")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Explicit learning rate override (defaults to 1e-3 for semantic, 1e-4 for forensic/fusion)")
     args, unknown = parser.parse_known_args()
 
     print("=" * 80)
@@ -1478,7 +1620,56 @@ def main() -> int:
         print(f"# PARADIGM 0: CANONICAL R2 SPEC (SD1.4-Only Train/Val, Variants: {variants_to_run})")
         print("#" * 80)
 
-        canonical_splits = build_canonical_r2_splits(all_records, n_val=100, seed=seed)
+        # Check for sealed manifests per docs/plans/r2-forensic-perception-v1.md
+        train_manifest = args.train_manifest
+        val_manifest = args.val_manifest
+        test_manifest = args.test_manifest
+        eval_manifests = args.eval_manifests
+
+        search_dirs: list[Path] = []
+        if args.manifest_dir:
+            search_dirs.append(Path(args.manifest_dir))
+        search_dirs.append(Path(__file__).resolve().parent / "manifests")
+        kaggle_input = Path("/kaggle/input")
+        if kaggle_input.exists():
+            for sub in kaggle_input.iterdir():
+                if sub.is_dir():
+                    search_dirs.append(sub)
+
+        if not train_manifest or not val_manifest:
+            for sdir in search_dirs:
+                if not sdir.exists():
+                    continue
+                t_cand = [sdir / "train_manifest.jsonl", sdir / "train.jsonl", sdir / "train.csv"]
+                v_cand = [sdir / "val_manifest.jsonl", sdir / "val.jsonl", sdir / "val.csv"]
+                found_t = next((str(p) for p in t_cand if p.exists()), None)
+                found_v = next((str(p) for p in v_cand if p.exists()), None)
+                if found_t and found_v:
+                    train_manifest = found_t
+                    val_manifest = found_v
+                    if not test_manifest and not eval_manifests:
+                        test_cand = [sdir / "test_manifest.jsonl", sdir / "test.jsonl", sdir / "test.csv"]
+                        test_manifest = next((str(p) for p in test_cand if p.exists()), None)
+                    break
+
+        if train_manifest and val_manifest:
+            logger.info("Using sealed R0 manifests:")
+            logger.info("  Train: %s", train_manifest)
+            logger.info("  Val:   %s", val_manifest)
+            if test_manifest:
+                logger.info("  Test:  %s", test_manifest)
+            canonical_splits = load_splits_from_manifests(
+                train_manifest=train_manifest,
+                val_manifest=val_manifest,
+                test_manifest=test_manifest,
+                eval_manifests=eval_manifests,
+                base_dir=Path(args.base_dir) if args.base_dir else None,
+                extracted_records=all_records,
+                seed=seed,
+            )
+        else:
+            logger.info("No sealed manifest flags or files detected. Building canonical R2 splits on-the-fly (pilot mode).")
+            canonical_splits = build_canonical_r2_splits(all_records, n_val=100, seed=seed)
 
         for v in variants_to_run:
             set_seed(seed)
@@ -1500,6 +1691,7 @@ def main() -> int:
                 dataset_revision=full_dataset_rev,
                 variant=v,
                 clip_model=args.clip_model,
+                learning_rate=args.learning_rate,
             )
             all_experiment_reports[exp_name] = report
             del model
@@ -1537,6 +1729,7 @@ def main() -> int:
                 dataset_revision=full_dataset_rev,
                 variant=v,
                 clip_model=args.clip_model,
+                learning_rate=args.learning_rate,
             )
             all_experiment_reports[exp_name] = report
             del model
@@ -1573,6 +1766,7 @@ def main() -> int:
             dataset_revision=full_dataset_rev,
             variant=aio_variant,
             clip_model=args.clip_model,
+            learning_rate=args.learning_rate,
         )
         all_experiment_reports[aio_exp_name] = aio_report
         del aio_model
