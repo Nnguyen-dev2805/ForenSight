@@ -604,6 +604,12 @@ class EvaluationReport:
         )
         lines.append("|:---|:---|:---|")
         lines.append(f"| **AUROC** | **{_fmt_metric(self.overall.auroc)}** | Primary threshold-free generalization metric |")
+        if self.overall.eer is not None:
+            lines.append(f"| **EER** | {_fmt_metric(self.overall.eer)} | Equal Error Rate (lower is better) |")
+        if self.overall.pr_auc is not None:
+            lines.append(f"| **PR-AUC** | {_fmt_metric(self.overall.pr_auc)} | Area under Precision-Recall Curve |")
+        if self.overall.tpr_at_1pct_fpr is not None:
+            lines.append(f"| **TPR@1%FPR** | {_fmt_metric(self.overall.tpr_at_1pct_fpr)} | Detection rate at 1% false alarm budget |")
         lines.append(f"| **Accuracy** | {_fmt_metric(self.overall.accuracy)} | Classification accuracy at $\\tau^*$ |")
         lines.append(f"| **F1 Score** | {_fmt_metric(self.overall.f1)} | Harmonic mean of precision and recall for AI-generated class |")
         lines.append(f"| **Precision** | {_fmt_metric(self.overall.precision)} | Proportion of true AI images among predicted AI images |")
@@ -784,7 +790,6 @@ def evaluate_predictions(
         "val_samples_count": val_samples_count,
         "val_cohort_hash": val_cohort_hash,
         "default_threshold": float(default_threshold),
-        "invariant_preserved": True,
     }
 
     # Annotate records with calibrated binary decision using tau_star
@@ -852,8 +857,16 @@ def evaluate_predictions(
 
         unique_labels = set(sub_gen.y_true)
         if len(unique_labels) == 1 and 1 in unique_labels and eval_reals:
-            # Synthetic generator with only fake images: combine with reference reals from evaluation scope
-            paired_records = list(sub_gen) + eval_reals
+            # Synthetic generator holding only fakes: pair it with reference reals, preferring
+            # reals from the same split(s). Reals come from a single source population
+            # (ImageNet) that is partitioned without replacement across evaluation splits,
+            # and training/validation records are already excluded from `eval_reals`, so
+            # falling back to sibling-split reals does not contaminate the slice -- it only
+            # changes which held-out reals serve as the negative reference.
+            gen_splits = {r.split for r in sub_gen if r.split is not None}
+            matching_reals = [r for r in eval_reals if r.split in gen_splits] if gen_splits else []
+            paired_reals = matching_reals if matching_reals else eval_reals
+            paired_records = list(sub_gen) + paired_reals
             gen_y_true = np.array([r.label for r in paired_records], dtype=int)
             gen_y_scores = np.array([r.score for r in paired_records], dtype=np.float64)
             by_generator[g] = compute_metrics(

@@ -15,16 +15,15 @@ R0 không trực tiếp trả lời RQ1–RQ3. Nó đảm bảo mọi kết lu�
 Chi tiết và bảng đặc tả đầy đủ xem tại [docs/dataset.md](../dataset.md).
 
 - **Active runtime datasets (R0 / R1):**
-  - **Primary training source:** GenImage — Stable Diffusion v1.4 (`sd14`).
-  - **In-domain validation/test:** GenImage — Stable Diffusion v1.4 (`sd14`).
-  - **Near-OOD:** GenImage — Stable Diffusion v1.5 (`sd15`).
-  - **Cross-generator OOD:** GenImage — Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN.
+  - **Primary training source:** Kaggle Tiny-GenImage — Stable Diffusion v1.5 (`sd15`).
+  - **In-domain validation/test:** Kaggle Tiny-GenImage — held-out Stable Diffusion v1.5 (`sd15`).
+  - **Cross-generator OOD:** Kaggle Tiny-GenImage — Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN.
   - **Modern external benchmark:** GenImage++ — test-only (FLUX.1, SD3, v.v.).
 - **Planned future benchmarks (không nằm trong core runtime R0/R1):**
   - **Real-world external benchmark:** WildRF — test-only.
   - **Optional external benchmark:** Chameleon / AIDE — test-only.
 
-GenImage được chọn vì có 8 generator và có protocol train trên SD v1.4 rồi test cross-generator đã được benchmark gốc sử dụng. Tuy nhiên GenImage có bias về JPEG compression và image size, nên project đo lường và định lượng bias ở Task 0.3 trước khi dùng kết luận research. Raw data được giữ immutable; mọi xử lý giảm bias nếu có sẽ là derived artifact riêng.
+Kaggle Tiny-GenImage được chọn cho Stage 1 vì có 7 generator chuẩn mực và kích thước gọn để chạy lặp nhiều seed. Tuy nhiên bộ dữ liệu có bias về JPEG compression (nature) vs PNG (ai) và image size, nên project đo lường và định lượng bias ở Task 0.3 trước khi dùng kết luận research. Raw data được giữ immutable; mọi xử lý giảm bias nếu có sẽ là derived artifact riêng.
 
 ## 3. Tasks
 
@@ -43,7 +42,7 @@ Ghi rõ với mỗi dataset:
 
 **Output:** machine-readable inventory + short Markdown summary.
 
-Inventory tối thiểu phải cover các nguồn đã chốt ở mục 2.1, nhưng chỉ GenImage SD1.4 cần có dữ liệu local ngay để bắt đầu R0. External benchmarks có thể inventory metadata/download path trước và tải sau.
+Inventory tối thiểu phải cover các nguồn đã chốt ở mục 2.1, nhưng chỉ Kaggle Tiny-GenImage SD1.5 cần có dữ liệu local ngay để bắt đầu R0. External benchmarks có thể inventory metadata/download path trước và tải sau.
 
 ### Task 0.2 — Define split policy
 
@@ -63,13 +62,10 @@ Protocol v1:
 
 ```text
 train:
-  GenImage / SD1.4 / train
+  Tiny-GenImage / SD1.5 / train
 
 validation + in-domain test:
-  GenImage / SD1.4 / held-out official split
-
-near-OOD:
-  GenImage / SD1.5
+  Tiny-GenImage / SD1.5 / held-out validation samples
 
 cross-generator OOD:
   GenImage / Midjourney
@@ -90,8 +86,8 @@ R0 phải kiểm tra exact duplicate (SHA256) và sample identity giữa các ma
 
 Để develop nhanh nhưng vẫn giữ diversity theo 1,000 ImageNet classes, tạo các scale manifest deterministic:
 
-- **smoke:** tối đa 1 real + 1 fake / class từ SD1.4 train;
-- **pilot:** tối đa 10 real + 10 fake / class từ SD1.4 train;
+- **smoke:** tối đa 1 real + 1 fake / class từ SD1.5 train;
+- **pilot:** tối đa 10 real + 10 fake / class từ SD1.5 train;
 - **main:** quyết định sau dataset audit và compute profiling; ưu tiên dùng toàn bộ dữ liệu hợp lệ trong budget thay vì chốt số lượng tùy ý từ trước.
 
 Smoke/pilot chỉ phục vụ development và preliminary experiment; kết luận research chính phải dùng main manifest đã khóa.

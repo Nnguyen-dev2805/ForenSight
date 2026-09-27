@@ -285,39 +285,26 @@ def build_default_inventory() -> DatasetInventory:
     """Build canonical Stage 1 dataset inventory for ForenSight.
 
     Covers:
-      1. GenImage (8 generators: SD1.4 [train + in-domain], SD1.5 [near-OOD],
+      1. Kaggle Tiny-GenImage (7 generators: SD1.5 [train + in-domain],
          Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN [cross-generator OOD])
       2. GenImage++ (modern external, test-only: FLUX.1, SD3, etc.)
     """
     genimage_subsets = [
         GeneratorSubset(
-            generator_id="sd14",
-            generator_name="Stable Diffusion v1.4",
+            generator_id="sd15",
+            generator_name="Stable Diffusion v1.5",
             role="train_and_in_domain",
             resolution="512x512 for fake; variable (ImageNet) for real",
             estimated_count={
-                "train_real": 1750,
-                "train_fake": 1750,
-                "val_real": 437,
-                "val_fake": 437,
-                "total": 4374,
-            },
-            local_path="data/raw/tiny_genimage/sd14",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
-            notes="Primary training source and in-domain held-out validation/test split for Stage 1.",
-        ),
-        GeneratorSubset(
-            generator_id="sd15",
-            generator_name="Stable Diffusion v1.5",
-            role="near_ood",
-            resolution="512x512 for fake; variable (ImageNet) for real",
-            estimated_count={
-                "val_fake": 437,
-                "total": 2187,
+                "train_real": 2000,
+                "train_fake": 2000,
+                "val_real": 500,
+                "val_fake": 500,
+                "total": 5000,
             },
             local_path="data/raw/tiny_genimage/sd15",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
-            notes="Near-OOD evaluation: same model family and architecture with updated weights.",
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
+            notes="Primary single-generator training source plus held-out in-domain validation/test for Stage 1.",
         ),
         GeneratorSubset(
             generator_id="midjourney",
@@ -329,7 +316,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/midjourney",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: closed-source commercial text-to-image generator.",
         ),
         GeneratorSubset(
@@ -342,7 +329,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/adm",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: pixel-space diffusion model with classifier guidance.",
         ),
         GeneratorSubset(
@@ -355,7 +342,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/glide",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: filtered pixel-space diffusion model.",
         ),
         GeneratorSubset(
@@ -368,7 +355,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/wukong",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: Chinese text-to-image diffusion model.",
         ),
         GeneratorSubset(
@@ -381,7 +368,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/vqdm",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: vector-quantized discrete diffusion model.",
         ),
         GeneratorSubset(
@@ -394,7 +381,7 @@ def build_default_inventory() -> DatasetInventory:
                 "total": 2187,
             },
             local_path="data/raw/tiny_genimage/biggan",
-            download_urls=["https://huggingface.co/datasets/TheKernel01/Tiny-GenImage"],
+            download_urls=["https://www.kaggle.com/datasets/yangsangtai/tiny-genimage"],
             notes="Cross-generator OOD: non-diffusion GAN architecture baseline.",
         ),
     ]
@@ -402,12 +389,11 @@ def build_default_inventory() -> DatasetInventory:
     genimage_entry = DatasetEntry(
         name="genimage",
         display_name="Tiny-GenImage",
-        version="1.0 (Subsampled Parquet)",
-        source="https://huggingface.co/datasets/TheKernel01/Tiny-GenImage",
-        evaluation_role="Primary Stage 1 benchmark (train, in-domain val/test, near-OOD, cross-generator OOD)",
+        version="Kaggle snapshot (7-generator Tiny-GenImage)",
+        source="https://www.kaggle.com/datasets/yangsangtai/tiny-genimage",
+        evaluation_role="Primary Stage 1 benchmark (SD1.5 train/in-domain + six cross-generator OOD sets)",
         real_source="ImageNet (ILSVRC2012)",
         fake_generators=[
-            "Stable Diffusion v1.4",
             "Stable Diffusion v1.5",
             "Midjourney",
             "ADM",
@@ -424,7 +410,7 @@ def build_default_inventory() -> DatasetInventory:
             "total": 35000,
         },
         resolution_distribution=(
-            "Fake images have model-native resolutions: 512x512 for SD1.4, SD1.5, Wukong; "
+            "Fake images have model-native resolutions: 512x512 for SD1.5 and Wukong; "
             "256x256 for ADM, GLIDE, VQDM, BigGAN; variable/512+ for Midjourney. "
             "Real ImageNet images have variable dimensions."
         ),
@@ -436,18 +422,18 @@ def build_default_inventory() -> DatasetInventory:
         label_mapping={"real": 0, "fake": 1},
         license="GenImage: Apache-2.0 / Research Use; ImageNet: Non-commercial educational and research terms.",
         access_requirements=(
-            "Open research download from the Hugging Face repository TheKernel01/Tiny-GenImage. "
-            "Extracted to local directory data/raw/tiny_genimage."
+            "Open research download from Kaggle dataset yangsangtai/tiny-genimage via kagglehub. "
+            "Stored under data/raw/tiny_genimage without rewriting raw images."
         ),
         local_path="data/raw/tiny_genimage",
         generator_subsets=genimage_subsets,
         download_instructions=[
             "Install project dependencies: pip install -e .",
-            "Download and extract Tiny-GenImage: python scripts/download_tiny_genimage.py --output-dir data/raw/tiny_genimage --manifest-dir data/manifests",
-            "Extracts Parquet images and automatically generates disjoint train, val, and OOD manifests.",
+            "Download Tiny-GenImage: python scripts/download_tiny_genimage.py --output-dir data/raw/tiny_genimage --manifest-dir data/manifests",
+            "Scans the Kaggle tree and generates disjoint SD1.5 train/val/in-domain and cross-generator OOD manifests.",
         ],
         notes=(
-            "Primary benchmark for Stage 1. Training is strictly restricted to SD1.4 subset to test cross-generator generalization. "
+            "Primary benchmark for Stage 1. Training is strictly restricted to the SD1.5 subset to test cross-generator generalization. "
             "Zero generator leakage is enforced across train, val, and OOD splits."
         ),
     )

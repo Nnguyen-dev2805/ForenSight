@@ -46,16 +46,14 @@ class TestGenerateSmokeDataset:
     def test_default_generation_structure_and_counts(self, tmp_path: Path):
         manifest_paths, manifests = generate_smoke_dataset(tmp_path, num_classes=5, seed=42)
 
-        expected_splits = {"train", "val", "near_ood", "cross_generator_ood"}
+        expected_splits = {"train", "val", "cross_generator_ood"}
         assert set(manifest_paths.keys()) == expected_splits
         assert set(manifests.keys()) == expected_splits
 
         # Check directory layout requirements
         expected_dirs = [
-            tmp_path / "genimage" / "sdv4" / "train" / "nature",
-            tmp_path / "genimage" / "sdv4" / "train" / "ai",
-            tmp_path / "genimage" / "sdv4" / "val" / "nature",
-            tmp_path / "genimage" / "sdv4" / "val" / "ai",
+            tmp_path / "genimage" / "sdv5" / "train" / "nature",
+            tmp_path / "genimage" / "sdv5" / "train" / "ai",
             tmp_path / "genimage" / "sdv5" / "val" / "nature",
             tmp_path / "genimage" / "sdv5" / "val" / "ai",
             tmp_path / "genimage" / "midjourney" / "val" / "nature",
@@ -137,23 +135,19 @@ class TestGenerateSmokeDataset:
 
         train_m = manifests["train"]
         val_m = manifests["val"]
-        near_m = manifests["near_ood"]
         cross_m = manifests["cross_generator_ood"]
 
         # Check generators
-        assert {r.generator for r in train_m if r.label == 1} == {"sd14"}
-        assert {r.generator for r in val_m if r.label == 1} == {"sd14"}
-        assert {r.generator for r in near_m if r.label == 1} == {"sd15"}
+        assert {r.generator for r in train_m if r.label == 1} == {"sd15"}
+        assert {r.generator for r in val_m if r.label == 1} == {"sd15"}
         assert {r.generator for r in cross_m if r.label == 1} == {"midjourney"}
 
         # Real generators are always 'nature'
         assert {r.generator for r in train_m if r.label == 0} == {"nature"}
-        assert {r.generator for r in near_m if r.label == 0} == {"nature"}
 
         # Invariant checks
-        assert_generator_disjoint(train_m, [near_m, cross_m])
+        assert_generator_disjoint(train_m, [cross_m])
         validate_no_leakage(train_m, val_m, check_generators=False, strict=True)
-        validate_no_leakage(train_m, near_m, check_generators=True, strict=True)
         validate_no_leakage(train_m, cross_m, check_generators=True, strict=True)
 
 
@@ -247,7 +241,6 @@ class TestRunSmokePipeline:
         # Verify breakdowns exist
         assert "by_split" in agg
         assert "val" in agg["by_split"]
-        assert "near_ood" in agg["by_split"]
         assert "cross_generator_ood" in agg["by_split"]
 
     def test_pipeline_artifacts_written_to_disk(self, tmp_path: Path):

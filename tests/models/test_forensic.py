@@ -30,6 +30,16 @@ def test_npr_transform_is_deterministic_and_shape_preserving():
     assert torch.equal(first, second)
 
 
+def test_npr_transform_standardizes_residual():
+    transform = NPRTransform(scale_factor=0.5, mode="bilinear")
+    image = torch.rand(2, 3, 32, 32)
+    residual = transform(image)
+    # Spatial std per channel should be standardized to ~1.0
+    stds = residual.std(dim=(-2, -1))
+    assert torch.allclose(stds, torch.ones_like(stds), atol=1e-3)
+
+
+
 def test_npr_transform_validates_inputs():
     with pytest.raises(ValueError, match="scale_factor"):
         NPRTransform(scale_factor=1.5)

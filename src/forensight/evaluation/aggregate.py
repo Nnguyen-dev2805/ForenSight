@@ -64,14 +64,19 @@ class AggregatedMetric:
     @property
     def formatted(self) -> str:
         """Return formatted mean ± std string (e.g. '0.8950 ± 0.0120')."""
-        if self.mean is None or self.std is None:
-            return "N/A"
-        return f"{self.mean:.4f} ± {self.std:.4f}"
+        return self.format()
 
     def format(self, digits: int = 4) -> str:
-        """Return formatted string with custom decimal precision."""
+        """Return formatted string with custom decimal precision.
+
+        A single run has no measurable dispersion, so it is reported with its sample
+        size instead of a `0.0000` standard deviation, which would falsely imply zero
+        variance and overstate the precision of a preliminary result.
+        """
         if self.mean is None or self.std is None:
             return "N/A"
+        if self.n <= 1:
+            return f"{self.mean:.{digits}f} (n={self.n}, preliminary)"
         return f"{self.mean:.{digits}f} ± {self.std:.{digits}f}"
 
     def __str__(self) -> str:
@@ -516,6 +521,7 @@ def aggregate_reports(
     seeds: list[int | str] = []
     aggregation_warnings: list[str] = []
     split_versions: set[str] = set()
+    dataset_revisions: list[str | None] = []
     split_sets: list[set[str]] = []
     sample_set_hashes: list[str | None] = []
     val_cohort_hashes: list[tuple[bool, str | None]] = []
@@ -537,6 +543,9 @@ def aggregate_reports(
             sv = r.run_metadata.get("split_version")
         if sv:
             split_versions.add(str(sv))
+        else:
+            split_versions.add(None)
+        dataset_revisions.append(r.run_metadata.get("dataset_revision") if isinstance(r.run_metadata, dict) else None)
 
         split_sets.append(set(r.by_split.keys()))
 
@@ -599,10 +608,20 @@ def aggregate_reports(
     is_preliminary = len(tracked_unique_seeds) < 3 or num_runs < 3
 
     # 1. Cohort and split version consistency checks
-    if len(split_versions) > 1:
+    if None in split_versions or len(split_versions) == 0:
         aggregation_warnings.append(
-            f"Mismatched split_version across runs: {sorted(list(split_versions))}."
+            "One or more reports lack a verified split_version; split identity cannot be proven."
         )
+        is_preliminary = True
+    elif len(split_versions) > 1:
+        aggregation_warnings.append(
+            f"Mismatched split_version across runs: {sorted(list(str(s) for s in split_versions))}."
+        )
+        is_preliminary = True
+
+    known_revisions = {revision for revision in dataset_revisions if revision}
+    if known_revisions and (len(known_revisions) > 1 or any(not revision for revision in dataset_revisions)):
+        aggregation_warnings.append("Mismatched or missing dataset_revision across runs.")
         is_preliminary = True
 
     # 2. Evaluated split names consistency
@@ -646,21 +665,33 @@ def aggregate_reports(
         )
         is_preliminary = True
 
-    # 6. Model/Architecture consistency
-    valid_models = {str(m) for m in model_names if m is not None}
-    if len(valid_models) > 1:
+    # 6. Model/Architecture/Variant consistency (MANDATORY: cannot aggregate disparate or anonymous models)
+    if any(m is None or not str(m).strip() for m in model_names):
         aggregation_warnings.append(
-            f"Mismatched model/architecture across runs: {sorted(list(valid_models))}. Disparate models cannot be aggregated into a single sealed baseline."
+            "One or more reports lack a verified model/variant/architecture identity; model identity cannot be proven."
         )
         is_preliminary = True
+    else:
+        valid_models = {str(m) for m in model_names}
+        if len(valid_models) > 1:
+            aggregation_warnings.append(
+                f"Mismatched model/architecture across runs: {sorted(list(valid_models))}. Disparate models cannot be aggregated into a single sealed baseline."
+            )
+            is_preliminary = True
 
-    # 7. Experiment name consistency
-    valid_exps = {str(e) for e in experiment_names if e is not None}
-    if len(valid_exps) > 1:
+    # 7. Experiment name consistency (MANDATORY: cannot aggregate disparate or anonymous experiments)
+    if any(e is None or not str(e).strip() for e in experiment_names):
         aggregation_warnings.append(
-            f"Mismatched experiment_name across runs: {sorted(list(valid_exps))}. Different experiments cannot be aggregated into a single sealed baseline."
+            "One or more reports lack a verified experiment_name; experiment identity cannot be proven."
         )
         is_preliminary = True
+    else:
+        valid_exps = {str(e) for e in experiment_names}
+        if len(valid_exps) > 1:
+            aggregation_warnings.append(
+                f"Mismatched experiment_name across runs: {sorted(list(valid_exps))}. Different experiments cannot be aggregated into a single sealed baseline."
+            )
+            is_preliminary = True
 
     # 8. Overall sample count consistency
     if len(set(overall_sample_counts)) > 1:

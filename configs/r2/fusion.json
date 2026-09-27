@@ -9,7 +9,9 @@
     "dropout": 0.2,
     "image_size": 224,
     "npr_scale_factor": 0.5,
-    "npr_mode": "bilinear"
+    "npr_mode": "bilinear",
+    "npr_normalization": "spatial_std",
+    "forensic_pretrained": true
   },
   "training": {
     "batch_size": 16,

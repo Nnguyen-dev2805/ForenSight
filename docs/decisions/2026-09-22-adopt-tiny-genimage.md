@@ -1,7 +1,11 @@
 # Decision: Adopt Tiny-GenImage as Primary Stage 1 Dataset
 
 Date: 2026-09-22
-Status: Accepted
+Status: Superseded
+
+Superseded by [2026-09-26 — Adopt Kaggle Tiny-GenImage Seven-Generator Protocol](2026-09-26-adopt-kaggle-tiny-genimage.md):
+`yangsangtai/tiny-genimage` contains no SD1.4 samples, so the SD1.4 training generator
+and the `near_ood` SD1.4/SD1.5 comparison described below are no longer reproducible.
 
 ## Context
 

@@ -11,14 +11,14 @@ Usage examples:
     # Aggregate 3 repeated runs across seeds
     python scripts/aggregate_runs.py \\
         --reports results/run_seed42.json results/run_seed43.json results/run_seed44.json \\
-        --output-json results/aggregated_sd14.json \\
-        --output-md results/aggregated_sd14.md
+        --output-json results/aggregated_sd15.json \\
+        --output-md results/aggregated_sd15.md
 
     # Using --report alias with custom report name
     python scripts/aggregate_runs.py \\
         --report results/s1.json results/s2.json results/s3.json \\
-        --report-name "SD1.4 Baseline 3-Seed" \\
-        --output-json results/sd14_sealed.json
+        --report-name "SD1.5 Baseline 3-Seed" \\
+        --output-json results/sd15_sealed.json
 """
 
 from __future__ import annotations

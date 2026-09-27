@@ -27,6 +27,7 @@ from forensight.data.split import (
     NON_GENERATOR_LABELS,
     Manifest,
     ManifestRecord,
+    normalize_manifest_path,
     validate_no_leakage,
 )
 
@@ -460,8 +461,9 @@ def audit_manifest_leakage(
     ),
     check_generators: bool = True,
     base_dir: str | Path | None = None,
+    check_content_hashes: bool = False,
 ) -> dict[str, Any]:
-    """Inspect manifests for sample ID collisions, image path collisions, and generator leakage.
+    """Inspect manifests for sample ID, path, generator, and optional byte leakage.
 
     Args:
         train_manifest: Training manifest.
@@ -469,6 +471,7 @@ def audit_manifest_leakage(
             or dict mapping split names to Manifests.
         check_generators: If True, checks that fake generator sets do not overlap.
         base_dir: Optional base directory prefix to resolve relative image paths.
+        check_content_hashes: Hash image bytes and reject cross-partition duplicates.
 
     Returns:
         Dictionary detailing detected collisions and generator leakage.
@@ -496,10 +499,9 @@ def audit_manifest_leakage(
         raise TypeError(f"Unsupported eval_manifests type: {type(eval_manifests)}")
 
     def _resolve_path(raw_path: str) -> Path:
-        p = Path(raw_path)
-        if not p.is_absolute() and base_dir is not None:
-            p = Path(base_dir) / p
-        return p.resolve()
+        # Lexical normalization keeps the leakage verdict independent of the working
+        # directory the audit happens to run in.
+        return normalize_manifest_path(raw_path, base_dir)
 
     train_ids = {r.sample_id for r in train_m}
     train_paths = {_resolve_path(r.image_path) for r in train_m}
@@ -512,6 +514,7 @@ def audit_manifest_leakage(
     sample_id_collisions: list[dict[str, Any]] = []
     image_path_collisions: list[dict[str, Any]] = []
     generator_overlaps: list[dict[str, Any]] = []
+    content_hash_collisions: list[dict[str, Any]] = []
     violations: list[str] = []
 
     for split_name, eval_m in named_evals.items():
@@ -601,11 +604,39 @@ def audit_manifest_leakage(
                     f"Image path leakage between evaluation partitions {name_i} and {name_j}: {len(cross_path_overlap)} shared paths."
                 )
 
+    if check_content_hashes:
+        partitions = {"train": train_m, **named_evals}
+        hashes_by_split: dict[str, dict[str, list[str]]] = {}
+        for name, manifest in partitions.items():
+            hashes: dict[str, list[str]] = {}
+            for record in manifest:
+                digest = compute_file_sha256(_resolve_path(record.image_path))
+                hashes.setdefault(digest, []).append(record.sample_id)
+            hashes_by_split[name] = hashes
+
+        names = list(hashes_by_split)
+        for i, left in enumerate(names):
+            for right in names[i + 1:]:
+                shared = hashes_by_split[left].keys() & hashes_by_split[right].keys()
+                if shared:
+                    content_hash_collisions.append({
+                        "partitions": [left, right],
+                        "count": len(shared),
+                        "sample_ids": [
+                            [hashes_by_split[left][digest], hashes_by_split[right][digest]]
+                            for digest in sorted(shared)[:10]
+                        ],
+                    })
+                    violations.append(
+                        f"Identical image bytes between {left} and {right}: {len(shared)} SHA256 collisions."
+                    )
+
     return {
         "has_leakage": len(violations) > 0,
         "sample_id_collisions": sample_id_collisions,
         "image_path_collisions": image_path_collisions,
         "generator_overlaps": generator_overlaps,
+        "content_hash_collisions": content_hash_collisions,
         "violations": violations,
     }
 

@@ -140,8 +140,53 @@ def test_build_forensic_input_transform():
     import torch
     from forensight.data.r2_dataset import build_forensic_input_transform
 
-    transform = build_forensic_input_transform(image_size=32)
     img = Image.new("RGB", (64, 48), color=(50, 60, 70))
-    tensor = transform(img)
-    assert isinstance(tensor, torch.Tensor)
-    assert tensor.shape == (3, 32, 32)
+    train_tensor = build_forensic_input_transform(image_size=32)(img)
+    eval_tensor = build_forensic_input_transform(image_size=32)(img)
+
+    assert isinstance(train_tensor, torch.Tensor)
+    assert train_tensor.shape == (3, 32, 32)
+    # Training and evaluation share one transform, so the two calls must be identical.
+    assert torch.allclose(eval_tensor, train_tensor)
+
+
+def test_forensic_transform_source_window_matches_semantic_geometry():
+    """Guard against reintroducing a zoom mismatch between the two branches.
+
+    OpenCLIP preprocesses with `Resize(n_px) + CenterCrop(n_px)`, which observes a
+    centred square window of `min(W, H)` source pixels. The forensic transform must
+    crop that same window, otherwise RQ1's semantic-vs-forensic comparison carries a
+    scale confound.
+    """
+    import numpy as np
+    from forensight.data.r2_dataset import build_forensic_input_transform
+
+    width, height = 640, 480
+    # Encode source coordinates into the pixels so the observed window is measurable.
+    coordinate_image = Image.fromarray(
+        np.stack(
+            [
+                np.tile(np.linspace(0, 255, width), (height, 1)),
+                np.tile(np.linspace(0, 255, height)[:, None], (1, width)),
+                np.zeros((height, width)),
+            ],
+            -1,
+        ).astype("uint8")
+    )
+
+    tensor = build_forensic_input_transform(224)(coordinate_image)
+    # ToTensor already scales pixels to [0, 1], so a channel value is the source
+    # coordinate expressed as a fraction of the image extent.
+    to_source_pixels = lambda value, size: float(value) * (size - 1)  # noqa: E731
+    observed = [
+        to_source_pixels(tensor[0, 0, 0], width),
+        to_source_pixels(tensor[0, 0, -1], width),
+        to_source_pixels(tensor[1, 0, 0], height),
+        to_source_pixels(tensor[1, -1, 0], height),
+    ]
+
+    side = min(width, height)
+    expected = [(width - side) / 2, (width + side) / 2, 0.0, float(side)]
+    assert observed == pytest.approx(expected, abs=4.0), (
+        f"forensic window {observed} does not match the semantic window {expected}"
+    )

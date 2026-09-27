@@ -1,5 +1,12 @@
 """Evaluation script for ForenSight Milestone R2: LOGO Model at Threshold 0.50 vs 0.73.
 
+WARNING -- NON-CANONICAL, DIAGNOSTIC ONLY.
+    This script is a self-contained fork of the R2 pipeline (see the warning in
+    `deploy/kaggle/main.py`) and it reuses its own model, preprocessing, and split logic.
+    Threshold sweeps here are sensitivity diagnostics only: a threshold must never be
+    chosen from test-set behaviour. The canonical pipeline calibrates tau* on the
+    validation partition alone (`src/forensight/evaluation/runner.py`).
+
 Evaluates pre-trained LOGO model (or trains if checkpoint not found in kernel inputs)
 across multiple decision thresholds (0.50, 0.73, etc.) on held-out Midjourney and Seen In-domain.
 """

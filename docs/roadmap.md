@@ -18,7 +18,7 @@ Xây nền tảng dữ liệu/evaluation cố định để mọi experiment sau
 
 - dataset inventory;
 - deterministic split manifests;
-- GenImage SD1.4 smoke/pilot/main scale manifests;
+- Kaggle Tiny-GenImage SD1.5 smoke/pilot/main scale manifests;
 - threshold policy;
 - leakage/bias checks;
 - metric implementation/spec;
@@ -37,6 +37,15 @@ Chỉ qua R1 khi:
 6. GenImage compression/resolution shortcut risk đã được định lượng trước khi chốt preprocessing cho Stage 1.
 
 Plan: `docs/plans/r0-dataset-evaluation.md`.
+
+> [!NOTE]
+> **Milestone bookkeeping (2026-09-26).** R0 is still marked `ACTIVE` while the R2
+> implementation (Stage-1 detectors, the `single`/`logo`/`all7` protocols, configs, and the
+> Kaggle kernels) already exists in the repository; the milestone transition was never
+> recorded. Before any R2 result is reported: (a) the R0 gate above needs explicit
+> sign-off, and (b) numbers produced by `deploy/kaggle/main.py` must not be compared
+> against numbers produced from `src/` (see
+> `docs/decisions/2026-09-26-align-branch-preprocessing.md`).
 
 ---
 
@@ -66,6 +75,8 @@ Baseline reproducible trên protocol R0.
 
 ## R2 — Stage 1: Forensic Perception
 
+**Status:** IMPLEMENTED — not formally `ACTIVE` until the R0 gate is signed off (see note under R0).
+
 ### Question
 
 Semantic + forensic representation có giúp cross-generator/cross-dataset generalization không?
@@ -85,10 +96,10 @@ Semantic + forensic representation có giúp cross-generator/cross-dataset gener
 
 ### Dataset v1
 
-- train: GenImage SD1.4;
-- in-domain: SD1.4;
-- near-OOD: SD1.5;
+- train: Kaggle Tiny-GenImage SD1.5;
+- in-domain: held-out SD1.5;
 - cross-generator OOD: Midjourney, ADM, GLIDE, Wukong, VQDM, BigGAN;
+- protocol modes: `single` (canonical RQ1: train SD1.5 -> 6 unseen OOD), `logo` (7-fold Leave-One-Generator-Out), `all7` (seen-generator upper-bound benchmark);
 - external: GenImage++ + WildRF; Chameleon optional.
 
 ### Gate

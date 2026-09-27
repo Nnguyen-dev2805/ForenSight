@@ -83,7 +83,6 @@ class TestDatasetInventory:
         inv = build_default_inventory()
         genimage = inv["genimage"]
         expected_generators = {
-            "sd14",
             "sd15",
             "midjourney",
             "adm",
@@ -95,16 +94,11 @@ class TestDatasetInventory:
         actual_generators = {s.generator_id for s in genimage.generator_subsets}
         assert actual_generators == expected_generators
 
-        # Check SD1.4 role and local path
-        sd14 = inv.get_generator_subset("genimage", "sd14")
-        assert sd14 is not None
-        assert sd14.role == "train_and_in_domain"
-        assert sd14.local_path == "data/raw/tiny_genimage/sd14"
-
-        # Check SD1.5 role
+        # Check SD1.5 role and local path
         sd15 = inv.get_generator_subset("genimage", "sd15")
         assert sd15 is not None
-        assert sd15.role == "near_ood"
+        assert sd15.role == "train_and_in_domain"
+        assert sd15.local_path == "data/raw/tiny_genimage/sd15"
 
         # Check cross-generator OOD subsets
         cross_ood = inv.find_subsets_by_role("cross_generator_ood")

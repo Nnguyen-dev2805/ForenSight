@@ -2,7 +2,7 @@
 
 This module implements Task 0.7 of ForenSight Milestone R0:
 - Deterministic synthetic dataset generator producing valid JPEG images in standard
-  GenImage hierarchy (SD1.4 train/val, SD1.5 near-OOD, Midjourney cross-generator OOD).
+  Stage-1 hierarchy (SD1.5 train/val and Midjourney cross-generator OOD).
 - End-to-end smoke-test pipeline executing all 7 R0 stages in seconds:
   1. Inventory verification (load_inventory, validation check).
   2. Synthetic dataset & manifest generation.
@@ -118,15 +118,13 @@ def generate_smoke_dataset(
     """Generate a lightweight synthetic JPEG dataset organized in standard GenImage layouts.
 
     Creates standard directory layouts:
-    - genimage/sdv4/train/nature, genimage/sdv4/train/ai
-    - genimage/sdv4/val/nature, genimage/sdv4/val/ai
+    - genimage/sdv5/train/nature, genimage/sdv5/train/ai
     - genimage/sdv5/val/nature, genimage/sdv5/val/ai
     - genimage/midjourney/val/nature, genimage/midjourney/val/ai
 
     Generates corresponding deterministic Manifest objects and writes JSONL manifests:
-    - 'train': In-domain SD1.4 train split
-    - 'val': In-domain SD1.4 validation split
-    - 'near_ood': SD1.5 near-OOD validation split
+    - 'train': In-domain SD1.5 train split
+    - 'val': In-domain SD1.5 validation split
     - 'cross_generator_ood': Midjourney cross-generator OOD validation split
 
     Args:
@@ -144,9 +142,8 @@ def generate_smoke_dataset(
 
     # Split specifications: (split_name, generator_folder, subsplit, fake_generator_id)
     split_configs = [
-        ("train", "sdv4", "train", "sd14"),
-        ("val", "sdv4", "val", "sd14"),
-        ("near_ood", "sdv5", "val", "sd15"),
+        ("train", "sdv5", "train", "sd15"),
+        ("val", "sdv5", "val", "sd15"),
         ("cross_generator_ood", "midjourney", "val", "midjourney"),
     ]
 
@@ -330,18 +327,16 @@ def run_smoke_pipeline(
     # -------------------------------------------------------------------------
     train_manifest = manifests["train"]
     val_manifest = manifests["val"]
-    near_ood_manifest = manifests["near_ood"]
     cross_gen_manifest = manifests["cross_generator_ood"]
 
     # 3.1 Strict generator-disjointness between train and OOD splits
     assert_generator_disjoint(
         train_manifest=train_manifest,
-        ood_manifests=[near_ood_manifest, cross_gen_manifest],
+        ood_manifests=[cross_gen_manifest],
     )
 
     # 3.2 Leakage validation between train and evaluation partitions
     validate_no_leakage(train_manifest, val_manifest, check_generators=False, strict=True)
-    validate_no_leakage(train_manifest, near_ood_manifest, check_generators=True, strict=True)
     validate_no_leakage(train_manifest, cross_gen_manifest, check_generators=True, strict=True)
 
     execution_stages["3_disjointness_and_leakage"] = {
@@ -357,7 +352,6 @@ def run_smoke_pipeline(
         train_manifest=train_manifest,
         eval_manifests={
             "val": val_manifest,
-            "near_ood": near_ood_manifest,
             "cross_generator_ood": cross_gen_manifest,
         },
         check_generators=True,
@@ -389,7 +383,7 @@ def run_smoke_pipeline(
     # Stage 5: Synthetic model predictions simulation across 3 distinct seeds
     # -------------------------------------------------------------------------
     eval_seeds = [seed, seed + 1, seed + 2]
-    eval_splits = ["val", "near_ood", "cross_generator_ood"]
+    eval_splits = ["val", "cross_generator_ood"]
 
     prediction_sets: list[tuple[int, PredictionSet]] = []
     for s in eval_seeds:
@@ -436,7 +430,14 @@ def run_smoke_pipeline(
             val_split_name="val",
             threshold_strategy="f1",
             seed=s,
-            run_metadata={"seed": s, "pipeline": "smoke_test"},
+            run_metadata={
+                "seed": s,
+                "pipeline": "smoke_test",
+                "split_version": "smoke-v1",
+                "model_name": "smoke_simulated",
+                "variant": "smoke_simulated",
+                "experiment_name": "smoke_pipeline",
+            },
         )
         report.save_json(eval_dir / f"report_seed_{s}.json")
         report.save_markdown(eval_dir / f"report_seed_{s}.md")

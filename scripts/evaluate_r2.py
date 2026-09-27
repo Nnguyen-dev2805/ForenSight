@@ -46,9 +46,28 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         help="Path to model checkpoint (.pt).",
     )
     parser.add_argument(
+        "--experiment",
+        type=str,
+        choices=["single", "logo", "all7"],
+        default=None,
+        help="Experiment protocol paradigm: 'single', 'logo', or 'all7'.",
+    )
+    parser.add_argument(
+        "--leave-out",
+        type=str,
+        default=None,
+        help="Held-out generator architecture for LOGO experiment.",
+    )
+    parser.add_argument(
+        "--manifest-dir",
+        type=str,
+        default="data/manifests",
+        help="Root directory for resolved manifests (default: data/manifests).",
+    )
+    parser.add_argument(
         "--val-manifest",
         type=str,
-        required=True,
+        default=None,
         help="Path to validation manifest (JSONL/CSV) for threshold calibration.",
     )
     parser.add_argument(
@@ -61,7 +80,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--eval-manifest",
         type=str,
         nargs="+",
-        required=True,
+        default=None,
         help="One or more evaluation test/OOD manifests (JSONL/CSV).",
     )
     parser.add_argument(
@@ -72,6 +91,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
+        "--out-dir",
         type=str,
         default=None,
         help="Directory to automatically save all run artifacts (predictions, evaluation, reproducibility, manifests).",
@@ -85,8 +105,8 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dataset-revision",
         type=str,
-        default="hf:TheKernel01/Tiny-GenImage@v1.0",
-        help="Dataset revision or commit SHA for exact provenance tracking.",
+        default=None,
+        help="Exact dataset revision for saved reproducibility reports.",
     )
     parser.add_argument(
         "--predictions-out",
@@ -127,8 +147,72 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if (args.output_dir or args.repro_json) and not args.dataset_revision:
+        raise ValueError("--dataset-revision is required when saving a reproducibility report")
+
+    # 1. Resolve experiment mode and manifest paths
+    manifest_base = Path(args.manifest_dir)
+    train_manifest_path: Path | None = None
+    val_manifest_path: Path | None = None
+    eval_manifest_paths: list[str] = []
+
+    if args.experiment == "single":
+        train_manifest_path = manifest_base / "single" / "train.jsonl"
+        val_manifest_path = manifest_base / "single" / "val.jsonl"
+        eval_manifest_paths = [
+            str(manifest_base / "single" / "in_domain_test.jsonl"),
+            str(manifest_base / "single" / "cross_generator_ood.jsonl"),
+        ]
+    elif args.experiment == "logo":
+        if not args.leave_out:
+            raise ValueError("--leave-out is required when --experiment is 'logo'")
+        train_manifest_path = manifest_base / "logo" / f"leave_{args.leave_out}" / "train.jsonl"
+        val_manifest_path = manifest_base / "logo" / f"leave_{args.leave_out}" / "val.jsonl"
+        eval_manifest_paths = [
+            str(manifest_base / "logo" / f"leave_{args.leave_out}" / "test_in_domain_seen.jsonl"),
+            str(manifest_base / "logo" / f"leave_{args.leave_out}" / f"test_{args.leave_out}.jsonl"),
+        ]
+    elif args.experiment == "all7":
+        train_manifest_path = manifest_base / "all7" / "train.jsonl"
+        val_manifest_path = manifest_base / "all7" / "val.jsonl"
+        eval_manifest_paths = [str(manifest_base / "all7" / "test_all_combined.jsonl")]
+
+    if args.train_manifest:
+        train_manifest_path = Path(args.train_manifest)
+    if args.val_manifest:
+        val_manifest_path = Path(args.val_manifest)
+    if args.eval_manifest:
+        eval_manifest_paths = list(args.eval_manifest)
+
+    if not val_manifest_path or not eval_manifest_paths:
+        raise ValueError(
+            "Missing manifest paths. Provide either --experiment {single,logo,all7} or both --val-manifest and --eval-manifest."
+        )
+
+    from forensight.data.audit import audit_manifest_leakage
+    from forensight.data.split import Manifest
+
+    out_dir = Path(args.output_dir) if args.output_dir else None
+    train_path = None
+    if train_manifest_path and Path(train_manifest_path).exists():
+        train_path = Path(train_manifest_path)
+    elif out_dir and (out_dir / "train_manifest.jsonl").exists():
+        train_path = out_dir / "train_manifest.jsonl"
+    train_m = load_manifest_file(train_path) if train_path else None
+    val_m = load_manifest_file(val_manifest_path)
+    eval_m_dict = {Path(path).stem: load_manifest_file(path) for path in eval_manifest_paths}
+    eval_splits_to_check = {"val": val_m, **eval_m_dict}
+    leakage_check = audit_manifest_leakage(
+        train_m if train_m is not None else val_m,
+        eval_splits_to_check if train_m is not None else eval_m_dict,
+        base_dir=args.base_dir,
+        check_content_hashes=True,
+    )
+    if leakage_check["has_leakage"]:
+        raise RuntimeError("Evaluation leakage audit FAILED: " + "; ".join(leakage_check["violations"]))
+
     config = load_r2_config(args.config)
     device = torch.device(args.device) if args.device else select_device()
     print(f"Using compute device: {device}")
@@ -136,7 +220,17 @@ def main() -> int:
     variant = config["variant"]
     print(f"Assembling model for variant: {variant}")
     model, clip_transform, forensic_transform = build_r2_model(config)
-    load_checkpoint(args.checkpoint, model, map_location=device)
+    checkpoint_state = load_checkpoint(args.checkpoint, model, map_location=device)
+    checkpoint_config = checkpoint_state.get("config")
+    if isinstance(checkpoint_config, dict):
+        checkpoint_variant = checkpoint_config.get("variant")
+        if checkpoint_variant is not None and checkpoint_variant != variant:
+            raise ValueError(
+                f"Checkpoint was trained as variant {checkpoint_variant!r} but the supplied "
+                f"config declares {variant!r}."
+            )
+        if checkpoint_config.get("model") != config["model"]:
+            raise ValueError("Checkpoint model config differs from the supplied evaluation model config")
     model.to(device)
     model.eval()
 
@@ -162,11 +256,11 @@ def main() -> int:
         return predict_to_prediction_set(model, loader, device=device, variant=variant)
 
     print("Generating validation predictions (for threshold calibration)...")
-    val_predictions = predict_manifest(args.val_manifest)
+    val_predictions = predict_manifest(val_manifest_path)
 
     eval_prediction_sets: list[PredictionSet] = []
-    print(f"Generating predictions for {len(args.eval_manifest)} evaluation manifests...")
-    for eval_path in args.eval_manifest:
+    print(f"Generating predictions for {len(eval_manifest_paths)} evaluation manifests...")
+    for eval_path in eval_manifest_paths:
         eval_prediction_sets.append(predict_manifest(eval_path))
 
     # Combine into a single PredictionSet
@@ -175,7 +269,6 @@ def main() -> int:
         all_records.extend(pset.records)
     combined = PredictionSet(all_records)
 
-    out_dir = Path(args.output_dir) if args.output_dir else None
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
         if not args.predictions_out:
@@ -190,25 +283,74 @@ def main() -> int:
     # Evaluate using the leak-free R0 runner (must run before saving predictions to calibrate tau_star)
     threshold_strategy = config.get("evaluation", {}).get("threshold_strategy", "f1")
     print(f"Running leak-free evaluation (val calibration strategy='{threshold_strategy}')...")
+    exp_name = args.experiment or f"r2_{variant}"
+    eval_run_meta: dict[str, Any] = {
+        "variant": variant,
+        "model_name": variant,
+        "model": variant,
+        "architecture": config.get("model", {}).get("architecture", variant),
+        "experiment": exp_name,
+        "experiment_name": exp_name,
+        "split_version": args.split_version,
+        "dataset": args.dataset,
+        "dataset_revision": args.dataset_revision,
+        "checkpoint_path": str(args.checkpoint),
+        "checkpoint_epoch": checkpoint_state.get("epoch"),
+    }
     report = evaluate_predictions(
         combined,
         val_split_name="val",
         threshold_strategy=threshold_strategy,
         seed=config.get("seed"),
+        run_metadata=eval_run_meta,
     )
+
+    from forensight.evaluation.metrics import compute_metrics
+    import numpy as np
+
+    test_only = PredictionSet([r for r in combined if r.split not in ("val", "validation", "valid")])
+    default_metrics = None
+    if len(test_only) > 0 and len(np.unique(test_only.y_true)) >= 2:
+        default_metrics = compute_metrics(
+            test_only.y_true,
+            test_only.y_scores,
+            threshold=0.5,
+            threshold_source="default_0.50",
+        )
 
     if args.predictions_out:
         out_path = Path(args.predictions_out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Save evaluated test records (strictly excluding validation partition)
-        test_only = PredictionSet([r for r in combined if r.split not in ("val", "validation", "valid")])
         test_only.to_jsonl(out_path)
         print(f"Saved {len(test_only)} test prediction records to {out_path}")
 
     if args.report_json:
         report_json_path = Path(args.report_json)
         report_json_path.parent.mkdir(parents=True, exist_ok=True)
-        report.save_json(report_json_path)
+        report_data = report.to_dict()
+        if default_metrics is not None:
+            thresh_val_meta = report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"])
+            report_data["dual_threshold_comparison"] = {
+                "calibrated_threshold": {
+                    "threshold": float(thresh_val_meta),
+                    "source": str(report.threshold_metadata["threshold_source"]),
+                    "accuracy": float(report.overall.accuracy),
+                    "f1": float(report.overall.f1),
+                    "precision": float(report.overall.precision),
+                    "recall": float(report.overall.recall),
+                },
+                "default_threshold": {
+                    "threshold": 0.50,
+                    "source": "default_0.50",
+                    "accuracy": float(default_metrics.accuracy),
+                    "f1": float(default_metrics.f1),
+                    "precision": float(default_metrics.precision),
+                    "recall": float(default_metrics.recall),
+                },
+            }
+        with open(report_json_path, "w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=2)
         print(f"Saved evaluation JSON report to {report_json_path}")
 
     if args.report_md:
@@ -230,47 +372,17 @@ def main() -> int:
             threshold_value=report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"]),
             metrics=report.to_dict(),
             seed=config.get("seed"),
+            **({"git_commit": config["git_commit"]} if "git_commit" in config else {}),
         )
         repro.save_json(repro_path)
         print(f"Saved reproducibility record to {repro_path}")
 
     if out_dir:
-        from forensight.data.audit import audit_manifest_leakage
-        from forensight.data.split import Manifest
-
-        # 1. Resolve train manifest if available (from CLI or pre-existing in out_dir from train_r2.py)
-        train_m = None
-        train_path = None
-        if args.train_manifest and Path(args.train_manifest).exists():
-            train_path = Path(args.train_manifest)
-        elif (out_dir / "train_manifest.jsonl").exists():
-            train_path = out_dir / "train_manifest.jsonl"
-
-        if train_path is not None:
-            train_m = load_manifest_file(train_path)
-
-        # 2. Persist val and combined test manifests into out_dir
-        val_m = load_manifest_file(args.val_manifest)
+        # Persist the manifests and the audit that passed before inference.
         val_m.to_jsonl(out_dir / "val_manifest.jsonl")
 
-        all_eval_records = []
-        eval_m_dict = {}
-        for p in args.eval_manifest:
-            m = load_manifest_file(p)
-            eval_m_dict[Path(p).stem] = m
-            all_eval_records.extend(m.records)
-
-        combined_test_m = Manifest(all_eval_records)
+        combined_test_m = Manifest([record for manifest in eval_m_dict.values() for record in manifest])
         combined_test_m.to_jsonl(out_dir / "test_manifest.jsonl")
-
-        # 3. Comprehensive pairwise leakage audit across train, val, and all test partitions
-        eval_splits_to_check = dict(eval_m_dict)
-        eval_splits_to_check["val"] = val_m
-
-        if train_m is not None:
-            leakage_check = audit_manifest_leakage(train_m, eval_splits_to_check)
-        else:
-            leakage_check = audit_manifest_leakage(val_m, eval_m_dict)
 
         audit_data: dict[str, Any] = {
             "val_samples": len(val_m),
@@ -297,10 +409,24 @@ def main() -> int:
 
     thresh_val = report.threshold_metadata.get("threshold_value", report.threshold_metadata["threshold"])
     print("\n--- Evaluation Summary ---")
-    print(f"Overall AUROC:    {report.overall.auroc}")
-    print(f"Overall Accuracy: {report.overall.accuracy:.4f}")
-    print(f"Overall F1:       {report.overall.f1:.4f}")
-    print(f"Threshold:        {thresh_val:.4f} ({report.threshold_metadata['threshold_source']})")
+    print(f"Overall AUROC:       {report.overall.auroc}")
+    if report.overall.eer is not None:
+        print(f"Overall EER:         {report.overall.eer:.4f}")
+    if report.overall.pr_auc is not None:
+        print(f"Overall PR-AUC:      {report.overall.pr_auc:.4f}")
+    if report.overall.tpr_at_1pct_fpr is not None:
+        print(f"Overall TPR@1%FPR:   {report.overall.tpr_at_1pct_fpr:.4f}")
+    print(f"\n[At Calibrated Threshold tau* = {thresh_val:.4f}] ({report.threshold_metadata['threshold_source']})")
+    print(f"  Accuracy:          {report.overall.accuracy:.4f}")
+    print(f"  F1:                {report.overall.f1:.4f}")
+    print(f"  Recall (TPR):      {report.overall.recall:.4f}")
+    print(f"  Precision:         {report.overall.precision:.4f}")
+    if default_metrics is not None:
+        print(f"\n[At Default Baseline Threshold tau = 0.5000] (default_0.50)")
+        print(f"  Accuracy:          {default_metrics.accuracy:.4f}")
+        print(f"  F1:                {default_metrics.f1:.4f}")
+        print(f"  Recall (TPR):      {default_metrics.recall:.4f}")
+        print(f"  Precision:         {default_metrics.precision:.4f}")
     return 0
 
 

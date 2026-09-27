@@ -4,6 +4,8 @@
 .agents/
 .codegraph/
 .superpowers/
+.freebuff
+.claude
 
 
 # Python caches and environments

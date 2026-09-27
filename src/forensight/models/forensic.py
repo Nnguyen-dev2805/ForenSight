@@ -47,7 +47,9 @@ class NPRTransform(nn.Module):
             mode=self.mode,
             align_corners=False,
         )
-        return image - reconstructed
+        residual = image - reconstructed
+        std = residual.std(dim=(-2, -1), keepdim=True)
+        return residual / (std + 1e-6)
 
 
 class ForensicEncoder(nn.Module):
@@ -102,9 +104,18 @@ def build_resnet18_forensic(
     projection_dim: int = 256,
     npr_scale_factor: float = 0.5,
     npr_mode: str = "bilinear",
+    pretrained: bool = False,
 ) -> ForensicEncoder:
-    """Build a trainable ResNet18 forensic encoder with NPR preprocessing."""
-    backbone = resnet18(weights=None)
+    """Build a trainable ResNet18 forensic encoder with NPR preprocessing.
+
+    When `pretrained=True`, initializes the ResNet18 backbone with
+    ImageNet1k weights (ResNet18_Weights.IMAGENET1K_V1) to prevent underfitting
+    or gradient collapse on small forensic training sets.
+    """
+    from torchvision.models import ResNet18_Weights, resnet18
+
+    weights = ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
+    backbone = resnet18(weights=weights)
     feature_dim = int(backbone.fc.in_features)
     backbone.fc = nn.Identity()
     return ForensicEncoder(

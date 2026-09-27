@@ -98,20 +98,21 @@ lại trong code hoặc report.
 
 ## Commands
 
-Canonical smoke/unit test:
+Canonical smoke/unit test (run through the project environment — the bare system `python3`
+does not have the dependencies installed):
 
-`python3 -m pytest`
+`uv run pytest`
 
 Canonical end-to-end smoke pipeline:
 
-`python3 scripts/run_smoke_test.py`
+`uv run python scripts/run_smoke_test.py`
 
 - Evaluation runner command:
-  `python3 scripts/run_evaluation.py --predictions <file> --val-split val`
+  `uv run python scripts/run_evaluation.py --predictions <file> --val-split val`
 - Multi-seed aggregation command:
-  `python3 scripts/aggregate_runs.py --reports <report1.json> <report2.json> <report3.json>`
+  `uv run python scripts/aggregate_runs.py --reports <report1.json> <report2.json> <report3.json>`
 - Dataset audit command:
-  `python3 scripts/check_dataset.py --manifest <manifest.jsonl>`
+  `uv run python scripts/check_dataset.py --manifest <manifest.jsonl>`
 - Trước khi claim completion, chạy verification phù hợp với files đã thay đổi.
 
 ## Reporting

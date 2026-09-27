@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Literal
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
 
 
 ThresholdStrategy = Literal["f1", "accuracy", "youden"]
@@ -113,6 +113,10 @@ class MetricResult:
     threshold: float
     threshold_source: str
     confusion_matrix: dict[str, int]
+    tpr_at_1pct_fpr: float | None = None
+    tpr_at_01pct_fpr: float | None = None
+    eer: float | None = None
+    pr_auc: float | None = None
 
     def __post_init__(self) -> None:
         """Validate result fields and types."""
@@ -133,6 +137,11 @@ class MetricResult:
             raise TypeError(f"threshold must be float, got {type(self.threshold)}")
         if not isinstance(self.threshold_source, str) or not self.threshold_source.strip():
             raise ValueError("threshold_source must be a non-empty string.")
+
+        for attr in ("tpr_at_1pct_fpr", "tpr_at_01pct_fpr", "eer", "pr_auc"):
+            val = getattr(self, attr)
+            if val is not None and not _is_numeric(val):
+                raise TypeError(f"{attr} must be float or None, got {type(val)}")
 
         required_cm_keys = {"tp", "fp", "tn", "fn"}
         if not isinstance(self.confusion_matrix, dict) or set(self.confusion_matrix.keys()) != required_cm_keys:
@@ -158,6 +167,10 @@ class MetricResult:
                 "tn": int(self.confusion_matrix["tn"]),
                 "fn": int(self.confusion_matrix["fn"]),
             },
+            "tpr_at_1pct_fpr": float(self.tpr_at_1pct_fpr) if self.tpr_at_1pct_fpr is not None else None,
+            "tpr_at_01pct_fpr": float(self.tpr_at_01pct_fpr) if self.tpr_at_01pct_fpr is not None else None,
+            "eer": float(self.eer) if self.eer is not None else None,
+            "pr_auc": float(self.pr_auc) if self.pr_auc is not None else None,
         }
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -188,6 +201,10 @@ class MetricResult:
                 "tn": int(data["confusion_matrix"]["tn"]),
                 "fn": int(data["confusion_matrix"]["fn"]),
             },
+            tpr_at_1pct_fpr=float(data["tpr_at_1pct_fpr"]) if data.get("tpr_at_1pct_fpr") is not None else None,
+            tpr_at_01pct_fpr=float(data["tpr_at_01pct_fpr"]) if data.get("tpr_at_01pct_fpr") is not None else None,
+            eer=float(data["eer"]) if data.get("eer") is not None else None,
+            pr_auc=float(data["pr_auc"]) if data.get("pr_auc") is not None else None,
         )
 
     @classmethod
@@ -224,6 +241,94 @@ def calculate_auroc(
         return None
 
     return float(roc_auc_score(y_t, y_s))
+
+
+def calculate_tpr_at_fpr(
+    y_true: Iterable[Any] | np.ndarray,
+    y_scores: Iterable[Any] | np.ndarray,
+    target_fpr: float = 0.01,
+    *,
+    min_negatives: int | None = None,
+) -> float | None:
+    """Calculate the True Positive Rate (TPR) at a fixed False Positive Rate (FPR).
+
+    Used in forensic detection and biometric security evaluations (e.g. TPR@1%FPR, TPR@0.1%FPR).
+    Returns None if only a single class is present in y_true, or if the number of negative samples
+    is insufficient to resolve the requested target_fpr (< ceil(1.0 / target_fpr)).
+    """
+    y_t, y_s = _validate_and_convert_inputs(y_true, y_scores)
+    if len(np.unique(y_t)) < 2:
+        return None
+    if not (0.0 <= target_fpr <= 1.0):
+        raise ValueError(f"target_fpr must be between 0.0 and 1.0, got {target_fpr}")
+
+    n_neg = int(np.sum(y_t == 0))
+    required_neg = (
+        min_negatives
+        if min_negatives is not None
+        else (int(np.ceil(1.0 / target_fpr)) if target_fpr > 0 else 1)
+    )
+    if n_neg < required_neg:
+        return None
+
+    fpr, tpr, _ = roc_curve(y_t, y_s)
+    return float(np.interp(target_fpr, fpr, tpr))
+
+
+def calculate_eer(
+    y_true: Iterable[Any] | np.ndarray,
+    y_scores: Iterable[Any] | np.ndarray,
+) -> float | None:
+    """Calculate Equal Error Rate (EER) where FPR == FNR (1 - TPR).
+
+    Lower is better. Returns None if only a single class is present in y_true.
+    Computes exact zero-crossing of (fpr - fnr) via linear interpolation.
+    """
+    y_t, y_s = _validate_and_convert_inputs(y_true, y_scores)
+    if len(np.unique(y_t)) < 2:
+        return None
+
+    fpr, tpr, _ = roc_curve(y_t, y_s)
+    fnr = 1.0 - tpr
+    diff = fpr - fnr
+
+    # Exact zero match
+    zero_indices = np.where(diff == 0.0)[0]
+    if len(zero_indices) > 0:
+        return float(fpr[zero_indices[0]])
+
+    # Crossing point where diff transitions from <= 0 to > 0
+    pos_indices = np.where(diff > 0.0)[0]
+    if len(pos_indices) == 0:
+        return 0.0
+    idx = int(pos_indices[0])
+    if idx == 0:
+        return float(fpr[0])
+
+    d0 = float(diff[idx - 1])
+    d1 = float(diff[idx])
+    if d1 - d0 == 0:
+        return float(fpr[idx])
+    t = -d0 / (d1 - d0)
+    eer = float(fpr[idx - 1] + t * (fpr[idx] - fpr[idx - 1]))
+    return float(np.clip(eer, 0.0, 1.0))
+
+
+def calculate_pr_auc(
+    y_true: Iterable[Any] | np.ndarray,
+    y_scores: Iterable[Any] | np.ndarray,
+) -> float | None:
+    """Calculate Area Under the Precision-Recall Curve (PR-AUC / Average Precision).
+
+    Evaluates detection performance under class imbalance.
+    Returns None if only a single class is present in y_true.
+    """
+    y_t, y_s = _validate_and_convert_inputs(y_true, y_scores)
+    if len(np.unique(y_t)) < 2:
+        return None
+
+    return float(average_precision_score(y_t, y_s))
+
 
 
 def select_threshold(
@@ -382,8 +487,12 @@ def compute_metrics(
     denom_f1 = precision + recall
     f1 = float((2.0 * precision * recall) / denom_f1) if denom_f1 > 0 else 0.0
 
-    # Primary metric: AUROC
+    # Primary & threshold-independent metrics
     auroc = calculate_auroc(y_t, y_s)
+    tpr_1pct = calculate_tpr_at_fpr(y_t, y_s, target_fpr=0.01)
+    tpr_01pct = calculate_tpr_at_fpr(y_t, y_s, target_fpr=0.001)
+    eer = calculate_eer(y_t, y_s)
+    pr_auc = calculate_pr_auc(y_t, y_s)
 
     return MetricResult(
         auroc=auroc,
@@ -394,6 +503,10 @@ def compute_metrics(
         threshold=thresh,
         threshold_source=str(threshold_source),
         confusion_matrix={"tp": tp, "fp": fp, "tn": tn, "fn": fn},
+        tpr_at_1pct_fpr=tpr_1pct,
+        tpr_at_01pct_fpr=tpr_01pct,
+        eer=eer,
+        pr_auc=pr_auc,
     )
 
 

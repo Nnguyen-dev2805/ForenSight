@@ -60,9 +60,9 @@ The function `select_threshold(y_true, y_scores, strategy=...)` supports three o
 
 Every evaluation run computes overall benchmark performance and multi-slice breakdowns:
 
-1. **Overall Benchmark:** Aggregated strictly across evaluation and test partitions (`in_domain_test`, `near_ood`, `cross_generator_ood`, `modern_external`). Training and validation partitions are **strictly excluded** from overall metrics.
-2. **Breakdown by Split:** Performance on individual partitions (`val`, `in_domain_test`, `near_ood`, `cross_generator_ood`, `modern_external`).
-3. **Breakdown by Generator Architecture:** Performance grouped by generative model (`sd14`, `sd15`, `midjourney`, `adm`, `glide`, `wukong`, `vqdm`, `biggan`, `flux`).
+1. **Overall Benchmark:** Aggregated strictly across evaluation and test partitions (`in_domain_test`, `cross_generator_ood`, `modern_external`). Training and validation partitions are **strictly excluded** from overall metrics.
+2. **Breakdown by Split:** Performance on individual partitions (`val`, `in_domain_test`, `cross_generator_ood`, `modern_external`).
+3. **Breakdown by Generator Architecture:** Performance grouped by generative model (`sd15`, `midjourney`, `adm`, `glide`, `wukong`, `vqdm`, `biggan`, `flux`).
 4. **Breakdown by Dataset Source:** Performance grouped by source dataset (`genimage`, `genimage_plus_plus`).
 
 ---

@@ -160,8 +160,8 @@ class ReproducibilityRecord:
         """Validate presence, types, and invariants of all required fields.
 
         Args:
-            require_provenance: If True, enforce that git_commit and dataset_revision
-                are non-empty strings for strict reproducibility tracking.
+            require_provenance: If True, require dataset_revision and either a
+                git commit or an exact source payload SHA256.
 
         Returns:
             List of validation error strings. Returns an empty list if all invariants pass.
@@ -234,9 +234,15 @@ class ReproducibilityRecord:
             elif isinstance(self.seed, str) and not self.seed.strip():
                 errors.append("seed cannot be an empty string if specified.")
 
-        # 11. git_commit: str or None (mandatory if require_provenance=True)
-        if require_provenance and (self.git_commit is None or not str(self.git_commit).strip()):
-            errors.append("git_commit must be a non-empty string for strict reproducibility provenance.")
+        # 11. Dirty source can be identified by the exact staged payload hash.
+        payload_hash = self.config.get("source_payload_sha256") if isinstance(self.config, dict) else None
+        has_payload_hash = (
+            isinstance(payload_hash, str)
+            and len(payload_hash) == 64
+            and all(ch in "0123456789abcdef" for ch in payload_hash.lower())
+        )
+        if require_provenance and not self.git_commit and not has_payload_hash:
+            errors.append("git_commit or source_payload_sha256 is required for strict reproducibility provenance.")
         elif self.git_commit is not None:
             if not isinstance(self.git_commit, str):
                 errors.append(

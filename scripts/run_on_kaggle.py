@@ -12,11 +12,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -38,13 +41,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logs", action="store_true", help="Print recent execution logs.")
     parser.add_argument("--download", action="store_true", help="Download output files (checkpoint, report).")
     parser.add_argument("--watch", action="store_true", help="Watch kernel status until complete and auto-download results.")
-    parser.add_argument("--experiment", choices=["canonical", "logo", "all_in_one", "all"], default=None, help="Experiment paradigm to execute")
+    parser.add_argument("--experiment", choices=["canonical", "single", "logo", "all_in_one", "all7", "all"], default=None, help="Experiment paradigm to execute")
     parser.add_argument("--variant", choices=["fusion", "semantic_only", "forensic_only", "all"], default=None, help="Model variant to run")
     parser.add_argument("--leave-out", default=None, help="Held-out generator for LOGO")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size")
     parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate override")
+    parser.add_argument("--dataset-ref", default=None, help="Pinned Kaggle dataset handle, e.g. yangsangtai/tiny-genimage/versions/1")
+    parser.add_argument(
+        "--prepare-manifests",
+        action="store_true",
+        help="Build sealed manifests inside the kernel from the pinned dataset instead of shipping local manifests.",
+    )
     return parser.parse_args()
 
 
@@ -56,54 +65,95 @@ def get_kaggle_cmd() -> list[str]:
     return ["kaggle"]
 
 
-def push_kernel(kernel_dir: str | Path, config: dict | None = None) -> bool:
-    kernel_path = Path(kernel_dir)
-    try:
-        git_res = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
-        git_sha = git_res.stdout.strip() or "unversioned"
-    except Exception:
-        git_sha = "unversioned"
+def prepare_official_bundle(
+    repo_root: Path, kernel_dir: Path, bundle_dir: Path, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Stage canonical code and sealed manifests without changing the checkout."""
+    dataset_ref = str(config.get("dataset_ref") or "")
+    if "/versions/" not in dataset_ref or not dataset_ref.rsplit("/versions/", 1)[-1].isdigit():
+        raise ValueError("Official Kaggle runs require a version-pinned --dataset-ref")
 
-    merged_config: dict[str, Any] = {"git_commit": git_sha}
-    if config:
-        merged_config.update(config)
+    experiment = config.get("experiment")
+    prepare_manifests = bool(config.get("prepare_manifests"))
+    manifest_root = repo_root / "data" / "manifests"
+    if experiment == "single":
+        required = [manifest_root / "single" / f"{name}.jsonl" for name in
+                    ("train", "val", "in_domain_test", "cross_generator_ood")]
+    elif experiment == "logo":
+        leave_out = config.get("leave_out")
+        if not leave_out:
+            raise ValueError("--leave-out is required for LOGO")
+        fold = manifest_root / "logo" / f"leave_{leave_out}"
+        required = [fold / f"{name}.jsonl" for name in
+                    ("train", "val", "test_in_domain_seen", f"test_{leave_out}")]
+    elif experiment == "all7":
+        required = [manifest_root / "all7" / f"{name}.jsonl" for name in
+                    ("train", "val", "test_all_combined")]
+    else:
+        raise ValueError("Official Kaggle experiment must be single, logo, or all7")
+    if prepare_manifests:
+        # The kernel rebuilds the splits from the pinned dataset; there is nothing to ship.
+        required = []
+    for path in required:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Sealed manifest missing: {path}. Generate it with "
+                "scripts/download_tiny_genimage.py, or pass --prepare-manifests to build it "
+                "inside the kernel from the pinned dataset."
+            )
+    if not prepare_manifests:
+        provenance_path = manifest_root / "manifest_provenance.json"
+        if not provenance_path.is_file():
+            raise FileNotFoundError(f"Sealed manifest provenance missing: {provenance_path}")
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        if provenance.get("dataset_ref") != dataset_ref or provenance.get("skip_download"):
+            raise ValueError("Staged manifest dataset_ref is unverified or differs from --dataset-ref")
 
-    commit_file = kernel_path / "commit_info.json"
-    with open(commit_file, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "git_commit": git_sha,
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            },
-            f,
-            indent=2,
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(kernel_dir / "kernel-metadata.json", bundle_dir / "kernel-metadata.json")
+    shutil.copy2(kernel_dir / "official.py", bundle_dir / "main.py")
+    folders = ["src", "scripts", "configs"]
+    if not prepare_manifests:
+        folders.append("data/manifests")
+    for folder in folders:
+        shutil.copytree(
+            repo_root / folder, bundle_dir / folder,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
 
-    config_file = kernel_path / "run_config.json"
-    with open(config_file, "w", encoding="utf-8") as f:
-        json.dump(merged_config, f, indent=2)
+    digest = hashlib.sha256()
+    for path in sorted(p for p in bundle_dir.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(bundle_dir).as_posix().encode())
+        digest.update(path.read_bytes())
+    prepared = dict(config)
+    prepared["prepare_manifests"] = prepare_manifests
+    prepared["source_payload_sha256"] = digest.hexdigest()
+    (bundle_dir / "run_config.json").write_text(json.dumps(prepared, indent=2), encoding="utf-8")
+    return prepared
 
-    logger.info("Injected provenance git commit '%s' and config: %s", git_sha, merged_config)
 
-    main_py = kernel_path / "main.py"
-    orig_code = main_py.read_text(encoding="utf-8")
-    injected_code_str = f"INJECTED_CONFIG: dict[str, Any] = {json.dumps(merged_config, indent=4)}"
-    if "INJECTED_CONFIG: dict[str, Any] = {}" in orig_code:
-        modified_code = orig_code.replace("INJECTED_CONFIG: dict[str, Any] = {}", injected_code_str, 1)
-    else:
-        modified_code = orig_code
+def push_kernel(kernel_dir: str | Path, config: dict | None = None) -> bool:
+    repo_root = Path(__file__).resolve().parent.parent
+    kernel_path = (repo_root / kernel_dir).resolve()
+    git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root, capture_output=True, text=True)
+    git_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo_root, capture_output=True, text=True)
+    dirty = git_status.returncode != 0 or bool(git_status.stdout.strip())
+    run_config = dict(config or {})
+    run_config.update({
+        "git_commit": git_head.stdout.strip() if git_head.returncode == 0 and not dirty else None,
+        "base_commit": git_head.stdout.strip() if git_head.returncode == 0 else None,
+        "git_dirty": dirty,
+    })
 
-    try:
-        main_py.write_text(modified_code, encoding="utf-8")
-        cmd = get_kaggle_cmd() + ["kernels", "push", "-p", str(kernel_dir)]
-        logger.info("Pushing kernel to Kaggle: %s", " ".join(cmd))
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        print(res.stdout)
-        if res.stderr:
-            print(res.stderr, file=sys.stderr)
-        return res.returncode == 0
-    finally:
-        main_py.write_text(orig_code, encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="forensight_kaggle_") as temporary:
+        bundle_dir = Path(temporary)
+        prepared = prepare_official_bundle(repo_root, kernel_path, bundle_dir, run_config)
+        logger.info("Pushing sealed %s bundle %s", prepared["experiment"], prepared["source_payload_sha256"])
+        result = subprocess.run(get_kaggle_cmd() + ["kernels", "push", "-p", str(bundle_dir)], capture_output=True, text=True)
+        print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+        return result.returncode == 0
 
 
 def get_status(kernel_slug: str) -> str:
@@ -203,6 +253,8 @@ def main() -> int:
         args.status = True
 
     if args.push:
+        if not all((args.experiment in {"single", "logo", "all7"}, args.variant, args.seed is not None, args.dataset_ref)):
+            raise ValueError("--push requires --experiment {single,logo,all7}, --variant, --seed, and --dataset-ref")
         run_cfg: dict[str, Any] = {}
         if args.experiment:
             run_cfg["experiment"] = args.experiment
@@ -218,6 +270,14 @@ def main() -> int:
             run_cfg["batch_size"] = args.batch_size
         if args.learning_rate is not None:
             run_cfg["learning_rate"] = args.learning_rate
+        run_cfg["dataset_ref"] = args.dataset_ref
+        if args.variant == "all":
+            raise ValueError(
+                "--push runs exactly one variant; push fusion, semantic_only, and "
+                "forensic_only separately so each run keeps its own provenance."
+            )
+        if args.prepare_manifests:
+            run_cfg["prepare_manifests"] = True
 
         success = push_kernel(args.kernel_dir, config=run_cfg if run_cfg else None)
         if not success:

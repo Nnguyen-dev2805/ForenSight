@@ -32,12 +32,28 @@ def load_manifest_file(path: str | Path) -> Manifest:
     raise ValueError(f"Unsupported manifest format: {path.suffix}")
 
 
-def build_forensic_input_transform(image_size: int = 224) -> ImageTransform:
-    """Standard RGB tensor transform for forensic branch input."""
+def build_forensic_input_transform(
+    image_size: int = 224,
+    *,
+    scale_size: int | None = None,
+) -> ImageTransform:
+    """Isotropic transform for the forensic branch, spatially matched to the semantic branch.
+
+    Resizes the shorter edge to `scale_size`, then CenterCrops to `image_size`. With the
+    default `scale_size = image_size` this reproduces OpenCLIP's
+    `Resize(n_px) + CenterCrop(n_px)` geometry, so the semantic (CLIP) and forensic
+    (ResNet) streams observe the same source window and RQ1's branch comparison carries
+    no scale confound. Training and evaluation share this single transform.
+    """
+    if scale_size is None:
+        scale_size = image_size
+
     return transforms.Compose([
-        transforms.Resize((image_size, image_size)),
+        transforms.Resize(scale_size),
+        transforms.CenterCrop(image_size),
         transforms.ToTensor(),
     ])
+
 
 
 class R2ImageDataset(Dataset[dict[str, Any]]):

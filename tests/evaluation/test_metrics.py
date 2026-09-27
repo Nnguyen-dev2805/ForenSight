@@ -521,3 +521,98 @@ class TestMetricResultSerialization:
                 threshold_source="default_0.5",
                 confusion_matrix={"tp": True, "fp": 0, "tn": 1, "fn": 0},  # type: ignore[dict-item]
             )
+
+
+class TestExtendedForensicMetrics:
+    """Unit tests for TPR@FPR, EER, and PR-AUC."""
+
+    def test_calculate_tpr_at_fpr_perfect(self):
+        from forensight.evaluation.metrics import calculate_tpr_at_fpr
+
+        # With 100 negatives, target_fpr=0.01 is empirically valid
+        y_true = [0] * 100 + [1] * 100
+        y_scores = [0.1] * 100 + [0.9] * 100
+        tpr = calculate_tpr_at_fpr(y_true, y_scores, target_fpr=0.01)
+        assert tpr == 1.0
+
+    def test_calculate_tpr_at_fpr_sample_guard(self):
+        from forensight.evaluation.metrics import calculate_tpr_at_fpr
+
+        # 4 negatives cannot resolve 1% FPR (requires >= 100 negatives)
+        y_true = [0, 0, 0, 0, 1, 1, 1, 1]
+        y_scores = [0.1, 0.2, 0.15, 0.25, 0.8, 0.85, 0.9, 0.95]
+        assert calculate_tpr_at_fpr(y_true, y_scores, target_fpr=0.01) is None
+        # But can resolve 25% FPR (requires >= 4 negatives)
+        assert calculate_tpr_at_fpr(y_true, y_scores, target_fpr=0.25) == 1.0
+
+    def test_calculate_tpr_at_fpr_single_class(self):
+        from forensight.evaluation.metrics import calculate_tpr_at_fpr
+
+        assert calculate_tpr_at_fpr([1, 1, 1], [0.8, 0.9, 0.7]) is None
+        assert calculate_tpr_at_fpr([0, 0, 0], [0.1, 0.2, 0.3]) is None
+
+    def test_calculate_tpr_at_fpr_invalid_range(self):
+        from forensight.evaluation.metrics import calculate_tpr_at_fpr
+
+        with pytest.raises(ValueError, match="target_fpr must be between"):
+            calculate_tpr_at_fpr([0, 1], [0.2, 0.8], target_fpr=-0.1)
+        with pytest.raises(ValueError, match="target_fpr must be between"):
+            calculate_tpr_at_fpr([0, 1], [0.2, 0.8], target_fpr=1.5)
+
+    def test_calculate_eer_perfect(self):
+        from forensight.evaluation.metrics import calculate_eer
+
+        y_true = [0, 0, 1, 1]
+        y_scores = [0.1, 0.2, 0.8, 0.9]
+        eer = calculate_eer(y_true, y_scores)
+        assert eer == 0.0
+
+    def test_calculate_eer_linear_interpolation(self):
+        from forensight.evaluation.metrics import calculate_eer
+
+        # Non-separable with crossing between discrete steps
+        y_true = [0, 0, 0, 1, 1, 1]
+        y_scores = [0.1, 0.4, 0.6, 0.3, 0.5, 0.9]
+        eer = calculate_eer(y_true, y_scores)
+        assert eer is not None
+        assert 0.0 < eer < 1.0
+
+    def test_calculate_eer_single_class(self):
+        from forensight.evaluation.metrics import calculate_eer
+
+        assert calculate_eer([1, 1], [0.8, 0.9]) is None
+
+    def test_calculate_pr_auc_perfect(self):
+        from forensight.evaluation.metrics import calculate_pr_auc
+
+        y_true = [0, 0, 1, 1]
+        y_scores = [0.1, 0.2, 0.8, 0.9]
+        pr_auc = calculate_pr_auc(y_true, y_scores)
+        assert pr_auc == 1.0
+
+    def test_calculate_pr_auc_single_class(self):
+        from forensight.evaluation.metrics import calculate_pr_auc
+
+        assert calculate_pr_auc([0, 0], [0.1, 0.2]) is None
+
+    def test_compute_metrics_includes_forensic_metrics(self):
+        # With sufficient samples (>= 1000 negatives), both TPR@1% and TPR@0.1% are valid
+        y_true = [0] * 1000 + [1] * 1000
+        y_scores = [0.1] * 1000 + [0.9] * 1000
+        res = compute_metrics(y_true, y_scores)
+        assert res.auroc == 1.0
+        assert res.eer == 0.0
+        assert res.pr_auc == 1.0
+        assert res.tpr_at_1pct_fpr == 1.0
+        assert res.tpr_at_01pct_fpr == 1.0
+
+    def test_compute_metrics_small_sample_guards_tpr(self):
+        # Small sample size (2 negatives) gracefully sets TPR@FPR to None while computing other metrics
+        y_true = [0, 0, 1, 1]
+        y_scores = [0.1, 0.2, 0.8, 0.9]
+        res = compute_metrics(y_true, y_scores)
+        assert res.auroc == 1.0
+        assert res.eer == 0.0
+        assert res.pr_auc == 1.0
+        assert res.tpr_at_1pct_fpr is None
+        assert res.tpr_at_01pct_fpr is None

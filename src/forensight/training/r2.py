@@ -58,6 +58,7 @@ def build_r2_model(
             projection_dim=model_cfg["projection_dim"],
             npr_scale_factor=model_cfg["npr_scale_factor"],
             npr_mode=model_cfg["npr_mode"],
+            pretrained=model_cfg.get("forensic_pretrained", False),
         )
         forensic_transform = build_forensic_input_transform(model_cfg.get("image_size", 224))
 
@@ -116,6 +117,11 @@ def load_r2_config(path: str | Path) -> dict[str, Any]:
     for section in REQUIRED_CONFIG_SECTIONS:
         if section not in config or not isinstance(config[section], dict):
             raise ValueError(f"Missing required configuration section: '{section}'")
+
+    if config["variant"] in {"forensic", "fusion"}:
+        normalization = config["model"].setdefault("npr_normalization", "spatial_std")
+        if normalization != "spatial_std":
+            raise ValueError("npr_normalization must be 'spatial_std' for the R2 baseline")
 
     return config
 
@@ -214,6 +220,37 @@ def validate_one_epoch(
     return avg_loss, val_auroc
 
 
+STATE_DICT_SCOPE_TRAINABLE = "trainable_subtrees"
+
+
+def _frozen_subtree_names(model: nn.Module) -> list[str]:
+    """Names of submodules whose whole subtree is frozen (holds no trainable parameter)."""
+    frozen: list[str] = []
+    for name, module in model.named_modules():
+        if not name:
+            continue
+        parameters = list(module.parameters(recurse=True))
+        if parameters and not any(p.requires_grad for p in parameters):
+            frozen.append(name)
+    return frozen
+
+
+def trainable_state_dict(model: nn.Module) -> dict[str, Any]:
+    """Return the model state restricted to trainable subtrees.
+
+    Frozen backbones (e.g. the CLIP vision tower) are fully determined by the
+    experiment config, so serializing them is redundant. Everything that actually
+    changes during training is kept, including buffers such as BatchNorm running
+    statistics inside the trainable forensic backbone.
+    """
+    frozen = _frozen_subtree_names(model)
+    return {
+        key: value
+        for key, value in model.state_dict().items()
+        if not any(key == prefix or key.startswith(prefix + ".") for prefix in frozen)
+    }
+
+
 def save_checkpoint(
     path: str | Path,
     model: nn.Module,
@@ -222,12 +259,17 @@ def save_checkpoint(
     epoch: int,
     config: dict[str, Any],
 ) -> None:
-    """Save model and optimizer state alongside training epoch and config."""
+    """Save trainable model state and optimizer state alongside epoch and config.
+
+    Only trainable subtrees are written; frozen backbones are rebuilt from `config`
+    at load time, which keeps run artifacts small.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     state = {
         "epoch": epoch,
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": trainable_state_dict(model),
+        "state_dict_scope": STATE_DICT_SCOPE_TRAINABLE,
         "optimizer_state_dict": optimizer.state_dict(),
         "config": config,
     }
@@ -241,9 +283,29 @@ def load_checkpoint(
     *,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
-    """Load model and optional optimizer state from a checkpoint file."""
+    """Load model and optional optimizer state from a checkpoint file.
+
+    Checkpoints written by `save_checkpoint` contain only trainable subtrees and are
+    verified against the trainable keys of the freshly built `model`; the frozen parts
+    come from that model. Legacy full state dictionaries are still accepted.
+    """
     checkpoint = torch.load(path, map_location=map_location)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state = checkpoint["model_state_dict"]
+
+    if checkpoint.get("state_dict_scope") == STATE_DICT_SCOPE_TRAINABLE:
+        expected = set(trainable_state_dict(model))
+        if set(state) != expected:
+            missing = sorted(expected - set(state))[:5]
+            unexpected = sorted(set(state) - expected)[:5]
+            raise ValueError(
+                "Checkpoint does not match the trainable parameters of the model built "
+                f"from the supplied config (missing={missing}, unexpected={unexpected}). "
+                "Check that the checkpoint variant matches the config variant."
+            )
+        model.load_state_dict(state, strict=False)
+    else:
+        model.load_state_dict(state)
+
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     return checkpoint

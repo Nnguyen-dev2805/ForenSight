@@ -106,6 +106,12 @@ class TestReproducibilityRecordDataclass:
         # assert_valid should not raise
         sample_valid_record.assert_valid()
 
+    def test_dirty_source_payload_is_valid_provenance_without_git_commit(self, sample_valid_record):
+        sample_valid_record.git_commit = None
+        sample_valid_record.dataset_revision = "kaggle:yangsangtai/tiny-genimage/versions/1"
+        sample_valid_record.config["source_payload_sha256"] = "a" * 64
+        assert sample_valid_record.validate(require_provenance=True) == []
+
     def test_missing_or_empty_string_fields(self):
         rec = ReproducibilityRecord(
             run_id="",

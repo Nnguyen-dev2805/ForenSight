@@ -739,6 +739,32 @@ class TestThresholdAndPartitionInvariants:
         assert cm_sd14["tp"] == 1  # 1 test fake detected
         assert cm_sd14["tn"] == 1  # 1 test real detected
 
+    def test_by_generator_pairs_reals_strictly_from_same_split(self):
+        records = [
+            PredictionRecord("v_real", 0, 0.1, split="val", generator="nature"),
+            PredictionRecord("v_fake", 1, 0.9, split="val", generator="sd14"),
+            # Split A (in domain)
+            PredictionRecord("t_real_a", 0, 0.15, split="test_a", generator="nature"),
+            PredictionRecord("t_fake_a", 1, 0.85, split="test_a", generator="sd14"),
+            # Split B (ood)
+            PredictionRecord("t_real_b", 0, 0.20, split="test_b", generator="nature"),
+            PredictionRecord("t_fake_b", 1, 0.75, split="test_b", generator="midjourney"),
+        ]
+        pset = PredictionSet(records)
+        report = evaluate_predictions(pset, val_split_name="val")
+
+        # sd14 is in test_a; it must ONLY be paired with t_real_a, not t_real_b
+        cm_sd14 = report.by_generator["sd14"].confusion_matrix
+        assert cm_sd14["tp"] + cm_sd14["fp"] + cm_sd14["tn"] + cm_sd14["fn"] == 2
+        assert cm_sd14["tp"] == 1
+        assert cm_sd14["tn"] == 1
+
+        # midjourney is in test_b; it must ONLY be paired with t_real_b, not t_real_a
+        cm_mj = report.by_generator["midjourney"].confusion_matrix
+        assert cm_mj["tp"] + cm_mj["fp"] + cm_mj["tn"] + cm_mj["fn"] == 2
+        assert cm_mj["tp"] == 1
+        assert cm_mj["tn"] == 1
+
     def test_sample_set_hash_encodes_canonical_tuples(self):
         # Two sets with identical sample_ids, but different ground-truth labels
         pset1 = PredictionSet([

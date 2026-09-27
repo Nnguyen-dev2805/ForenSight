@@ -1,7 +1,9 @@
 # ForenSight R2 — Forensic Perception v1 Implementation Spec
 
-**Status:** Draft — planning only, not yet ACTIVE  
-**Milestone:** R2 — Stage 1: Forensic Perception  
+**Status:** IMPLEMENTED — not formally `ACTIVE` until the R0 gate is signed off (see `docs/roadmap.md`).
+
+**Milestone:** R2 — Stage 1: Forensic Perception
+
 **Research question:** Does combining semantic and forensic representations improve cross-generator generalization compared with either representation alone?
 
 > This document specifies the smallest R2 experiment that can answer RQ1. It does not authorize adding extra branches, fusion mechanisms, or explanation/evidence modules before the baseline ablation is understood.
@@ -119,6 +121,9 @@ Important constraints:
 - no thresholding or handcrafted final detector;
 - interpolation and normalization choices are fixed in config and recorded in each experiment.
 
+R2 v1 uses per-channel spatial standard deviation normalization of the residual
+(`npr_normalization: spatial_std` in the forensic and fusion configs).
+
 This is a **ForenSight baseline inspired by NPR**, not a claim of reproducing the full NPR paper. The implementation phase should verify the exact transform against the selected reference implementation before training the main experiment.
 
 ### 4.3 Forensic encoder
@@ -218,33 +223,34 @@ These three variants are mandatory. R2 is not complete if only the fusion model 
 
 ## 6. Data protocol
 
-R2 must reuse the sealed R0 manifests. It must not create its own train/test split.
+R2 must reuse sealed manifests from the data subsystem. It must not create ad-hoc train/test splits.
 
-### Training
+### Experiment Protocols on Kaggle Tiny-GenImage
 
-```text
-GenImage SD1.4 train only
-```
+R2 supports three distinct protocols defined in `docs/dataset.md` and `docs/decisions/2026-09-26-three-experiment-protocols.md`:
 
-### Validation
+1. **`single` (Canonical RQ1 Protocol):**
+   - **Training:** Kaggle Tiny-GenImage SD1.5 train only.
+   - **Validation:** Kaggle Tiny-GenImage SD1.5 validation (checkpoint selection & threshold calibration $\tau^*$).
+   - **In-domain test:** Held-out SD1.5 test samples.
+   - **Cross-generator OOD tests:** 6 unseen generators (`adm`, `biggan`, `glide`, `midjourney`, `vqdm`, `wukong`).
+   - Manifest dir: `data/manifests/single/`
 
-```text
-GenImage SD1.4 validation
-```
+2. **`logo` (Leave-One-Generator-Out Protocol):**
+   - 7 folds (`leave_sd15`, `leave_adm`, etc.).
+   - Train on 6 seen generators, validate on 6 seen generators, evaluate on 1 unseen generator.
+   - Manifest dir: `data/manifests/logo/leave_<gen>/`
 
-Validation may be used for:
+3. **`all7` (Seen-Generator Multi-Generator Upper Bound):**
+   - Train on all 7 generators, validate on all 7, test on held-out samples of all 7 generators.
+   - Strictly representation capacity upper bound under closed-world generators; **not** unseen generalization.
+   - Manifest dir: `data/manifests/all7/`
 
-- checkpoint selection;
-- early stopping if enabled;
-- threshold selection;
-- hyperparameter decisions.
-
-### Test hierarchy
+### Test hierarchy (Canonical `single` protocol)
 
 | Level | Dataset / Generator | Purpose |
 |---|---|---|
-| In-domain | GenImage SD1.4 | Verify learned in-domain discrimination |
-| Near-OOD | GenImage SD1.5 | Same family, updated model weights |
+| In-domain | Tiny-GenImage SD1.5 | Verify learned in-domain discrimination |
 | Cross-generator OOD | Midjourney | Unseen generator |
 | Cross-generator OOD | ADM | Unseen generator |
 | Cross-generator OOD | GLIDE | Unseen generator |
@@ -324,7 +330,9 @@ The following must come from experiment configuration rather than being scattere
 - dropout;
 - seed;
 - image size / NPR resize settings;
-- early stopping setting;
+- early stopping setting (currently **disabled / not used**: training runs the full `epochs`
+  and keeps the best checkpoint by val AUROC, falling back to val loss. Add early stopping
+  only when a measured training failure motivates it, same as the scheduler);
 - threshold strategy.
 
 Do not add a complex scheduler in the first implementation. Add one only after a measured training failure motivates it.
@@ -384,8 +392,7 @@ At minimum, produce the following table using the same protocol for all three va
 
 | Benchmark | Semantic-only | Forensic-only | Fusion |
 |---|---:|---:|---:|
-| SD1.4 | — | — | — |
-| SD1.5 | — | — | — |
+| SD1.5 (In-Domain) | — | — | — |
 | Midjourney | — | — | — |
 | ADM | — | — | — |
 | GLIDE | — | — | — |
@@ -689,11 +696,10 @@ Pilot results may guide debugging and gross hyperparameter choices but are not f
 After the pilot pipeline is stable:
 
 ```text
-train on SD1.4 main
--> select checkpoint on SD1.4 validation
+train on SD1.5 main
+-> select checkpoint on SD1.5 validation
 -> select/freeze threshold on validation
--> evaluate SD1.4 test
--> evaluate SD1.5
+-> evaluate held-out SD1.5 in-domain test
 -> evaluate six cross-generator OOD sets
 -> evaluate GenImage++
 -> repeat required seeds
@@ -804,13 +810,12 @@ Loss:
     BCEWithLogitsLoss
 
 Training:
-    GenImage SD1.4 only
+    Kaggle Tiny-GenImage SD1.5 only
 
 Validation:
-    GenImage SD1.4 validation
+    Kaggle Tiny-GenImage SD1.5 validation
 
 Evaluation:
-    SD1.4
     SD1.5
     Midjourney
     ADM
@@ -829,4 +834,3 @@ Required ablation:
 Guiding principle:
 
 > Implement the smallest architecture capable of testing whether semantic and forensic representations provide complementary information for cross-generator AI-image detection.
-

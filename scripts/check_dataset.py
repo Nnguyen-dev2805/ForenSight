@@ -3,7 +3,7 @@
 
 Usage examples:
     # Audit a single manifest
-    python scripts/check_dataset.py --manifest data/manifests/train_sd14.jsonl --output-json report.json --output-md report.md
+    python scripts/check_dataset.py --manifest data/manifests/tiny_genimage_train.jsonl --output-json report.json --output-md report.md
 
     # Audit multiple manifests and check cross-split leakage
     python scripts/check_dataset.py --train-manifest data/train.jsonl --eval-manifest data/val.jsonl data/cross_gen.jsonl --output-md report.md --strict

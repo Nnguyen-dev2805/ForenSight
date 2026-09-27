@@ -409,13 +409,12 @@ class TestProtocolSummary:
     def test_protocol_v1_splits_consistency(self):
         assert "train" in PROTOCOL_V1_SPLITS
         assert "val" in PROTOCOL_V1_SPLITS
-        assert "near_ood" in PROTOCOL_V1_SPLITS
         assert "cross_generator_ood" in PROTOCOL_V1_SPLITS
         assert "modern_external" in PROTOCOL_V1_SPLITS
         assert "real_world_external" in PROTOCOL_V1_SPLITS
 
         train_gens = PROTOCOL_V1_SPLITS["train"]["generators"]
-        assert train_gens == ["sd14"]
+        assert train_gens == ["sd15"]
 
         ood_gens = PROTOCOL_V1_SPLITS["cross_generator_ood"]["generators"]
         expected_ood = ["midjourney", "adm", "glide", "wukong", "vqdm", "biggan"]
@@ -427,7 +426,7 @@ class TestProtocolSummary:
     def test_membership_summary_structure(self):
         summary = get_generator_membership_summary()
         assert summary["protocol_version"] == "v1"
-        assert summary["train_generators"] == ["sd14"]
+        assert summary["train_generators"] == ["sd15"]
         assert "cross_generator_ood" in summary
         assert set(summary["train_generators"]).isdisjoint(set(summary["cross_generator_ood"]))
         assert summary["scale_tiers"] == list(SCALE_TIERS.keys())

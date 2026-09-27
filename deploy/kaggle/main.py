@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 """ForenSight Milestone R2: Standalone Kaggle GPU Execution Script.
 
+WARNING -- NON-CANONICAL, DO NOT USE FOR REPORTED RESULTS.
+    This script is a self-contained fork of the R2 pipeline and has drifted from the
+    canonical implementation in `src/forensight/`. Verified divergences:
+      * the NPR residual is not standardized by its spatial std (canonical:
+        `models/forensic.py`, enforced by the `npr_normalization` guard in `training/r2.py`);
+      * forensic preprocessing uses `Resize((224, 224))`, an anisotropic square resize,
+        instead of `Resize(n) + CenterCrop(n)` (canonical: `data/r2_dataset.py`);
+      * the forensic backbone is built with `resnet18(weights=None)` while the canonical
+        configs set `forensic_pretrained: true`;
+      * splits and training hyperparameters are defined locally instead of being read from
+        sealed manifests and `configs/r2/*.json`.
+    Numbers produced here are therefore NOT protocol-equivalent to numbers produced from
+    `src/`. See docs/decisions/2026-09-26-align-branch-preprocessing.md.
+
 This script runs on Kaggle GPU (e.g., NVIDIA T4 x2) to:
 1. Download and extract TheKernel01/Tiny-GenImage dataset from Hugging Face Hub (pinned revision).
 2. Build generator-disjoint train, validation, and OOD test manifests.
@@ -1212,28 +1226,36 @@ def train_and_eval_experiment(
     logger.info("Run directory: %s", run_dir)
     logger.info("=" * 80)
 
-    # 1. Aggregate Test Splits and assert ZERO sample duplication
+    # 1. Aggregate Test Splits
     test_splits = sorted([k for k in splits.keys() if k not in ("train", "val")])
     all_test_records: list[dict] = []
     for split_name in test_splits:
         all_test_records.extend(splits[split_name])
 
-    test_ids = [r["sample_id"] for r in all_test_records]
-    if len(test_ids) != len(set(test_ids)):
-        dup_count = len(test_ids) - len(set(test_ids))
-        raise ValueError(f"CRITICAL ERROR: test splits contain {dup_count} duplicate samples!")
-
     save_manifest_jsonl(splits["train"], run_dir / "train_manifest.jsonl", default_split="train")
     save_manifest_jsonl(splits["val"], run_dir / "val_manifest.jsonl", default_split="val")
     save_manifest_jsonl(all_test_records, run_dir / "test_manifest.jsonl", default_split="in_domain_test")
-    logger.info("Saved train, val, and test manifests to %s (%d test records, 0 duplicates)", run_dir, len(all_test_records))
+    logger.info("Saved train, val, and test manifests to %s (%d test records)", run_dir, len(all_test_records))
 
-    # 2. Strict 3-way Dataset Audit with content-hash verification
+    # 2. Strict 3-way Dataset Audit with content-hash verification.
+    #    The audit is the single source of truth for leakage: it checks sample IDs, paths,
+    #    and SHA256 content hashes across all three partitions. Training must not proceed
+    #    on a FAILED audit -- the canonical pipeline aborts here too
+    #    (`scripts/train_r2.py`), and a duplicate train/val image silently inflates results.
     audit_data = generate_dataset_audit(splits["train"], splits["val"], all_test_records, dataset_revision=dataset_revision)
     with open(run_dir / "dataset_audit.json", "w", encoding="utf-8") as f:
         json.dump(audit_data, f, indent=2)
     logger.info("Dataset audit completed: %s (exact_duplicates=%s, hash_verified=%s)",
                 audit_data["status"], audit_data["leakage"]["exact_duplicates"], audit_data["leakage"]["content_hash_verified"])
+
+    if audit_data["status"] != "PASS":
+        leakage = audit_data["leakage"]
+        raise RuntimeError(
+            "Pre-flight leakage audit FAILED! Refusing to train on leaked splits. "
+            f"train/val={leakage['train_val_overlap']}, train/test={leakage['train_test_overlap']}, "
+            f"val/test={leakage['val_test_overlap']}, exact_duplicates={leakage['exact_duplicates']}. "
+            f"See {run_dir / 'dataset_audit.json'}."
+        )
 
     # 3. Save config.json with canonical variant name accepted by load_r2_config
     v_norm = "semantic" if variant in ("semantic", "semantic_only") else ("forensic" if variant in ("forensic", "forensic_only") else "fusion")
@@ -1563,8 +1585,8 @@ def main() -> int:
         "--experiment",
         type=str,
         default="canonical",
-        choices=["all", "canonical", "logo", "all_in_one"],
-        help="Experiment paradigms to execute ('canonical', 'logo', 'all_in_one', or 'all')",
+        choices=["all", "canonical", "single", "logo", "all_in_one", "all7"],
+        help="Experiment paradigms to execute ('canonical'/'single', 'logo', 'all_in_one'/'all7', or 'all')",
     )
     parser.add_argument("--leave-out", type=str, default="midjourney", help="Held-out generator for LOGO")
     parser.add_argument("--train-manifest", type=str, default=None, help="Path to sealed training manifest (JSONL/CSV)")
@@ -1652,9 +1674,9 @@ def main() -> int:
     # --------------------------------------------------------------------------
     # PARADIGM 0: CANONICAL R2 SPEC (SD1.4-Only Train/Val -> In-Domain, Near-OOD, Cross-Gen)
     # --------------------------------------------------------------------------
-    if args.experiment in ("all", "canonical"):
+    if args.experiment in ("all", "canonical", "single"):
         print("\n" + "#" * 80)
-        print(f"# PARADIGM 0: CANONICAL R2 SPEC (SD1.4-Only Train/Val, Variants: {variants_to_run})")
+        print(f"# PARADIGM 0: SINGLE GENERATOR (SD1.5 Train/Val -> In-Domain & Cross-Gen OOD, Variants: {variants_to_run})")
         print("#" * 80)
 
         # Check for sealed manifests per docs/plans/r2-forensic-perception-v1.md
@@ -1777,7 +1799,7 @@ def main() -> int:
     # --------------------------------------------------------------------------
     # PARADIGM 2: ALL-IN-ONE MULTI-GENERATOR (Upper Bound)
     # --------------------------------------------------------------------------
-    if args.experiment in ("all", "all_in_one"):
+    if args.experiment in ("all", "all_in_one", "all7"):
         print("\n" + "#" * 80)
         print("# PARADIGM 2: ALL-IN-ONE MULTI-GENERATOR (Upper Bound on All 7 Generators)")
         print("#" * 80)

@@ -15,6 +15,7 @@ import csv
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
 import random
 from typing import Any, Callable, Iterator
@@ -41,27 +42,21 @@ NON_GENERATOR_LABELS = {"nature", "real", "none", ""}
 PROTOCOL_V1_SPLITS: dict[str, dict[str, Any]] = {
     "train": {
         "dataset": "genimage",
-        "generators": ["sd14"],
+        "generators": ["sd15"],
         "split_role": "train",
-        "description": "GenImage SD1.4 official train split for model optimization",
+        "description": "Kaggle Tiny-GenImage SD1.5 train split for model optimization",
     },
     "val": {
         "dataset": "genimage",
-        "generators": ["sd14"],
+        "generators": ["sd15"],
         "split_role": "val",
-        "description": "GenImage SD1.4 held-out official validation split for threshold and hyperparameter tuning",
+        "description": "Kaggle Tiny-GenImage SD1.5 validation split for threshold and hyperparameter tuning",
     },
     "in_domain_test": {
         "dataset": "genimage",
-        "generators": ["sd14"],
-        "split_role": "test",
-        "description": "GenImage SD1.4 held-out official test split for final in-domain benchmark",
-    },
-    "near_ood": {
-        "dataset": "genimage",
         "generators": ["sd15"],
-        "split_role": "near_ood",
-        "description": "GenImage SD1.5 subset (same model family with updated weights)",
+        "split_role": "test",
+        "description": "Kaggle Tiny-GenImage SD1.5 held-out validation samples for in-domain testing",
     },
     "cross_generator_ood": {
         "dataset": "genimage",
@@ -87,12 +82,12 @@ SCALE_TIERS: dict[str, dict[str, Any]] = {
     "smoke": {
         "max_per_class_real": 1,
         "max_per_class_fake": 1,
-        "description": "Max 1 real + 1 fake per ImageNet class from SD1.4 train (pipeline sanity check)",
+        "description": "Max 1 real + 1 fake per ImageNet class from SD1.5 train (pipeline sanity check)",
     },
     "pilot": {
         "max_per_class_real": 10,
         "max_per_class_fake": 10,
-        "description": "Max 10 real + 10 fake per ImageNet class from SD1.4 train (preliminary experiments)",
+        "description": "Max 10 real + 10 fake per ImageNet class from SD1.5 train (preliminary experiments)",
     },
     "main": {
         "max_per_class_real": None,
@@ -312,6 +307,21 @@ class Manifest:
         )
 
 
+def normalize_manifest_path(
+    image_path: str | Path,
+    base_dir: str | Path | None = None,
+) -> Path:
+    """Normalize a manifest image path lexically, without touching the filesystem.
+
+    `Path.resolve()` would make leakage verdicts depend on the process working directory
+    (and on symlink layout), so sealed-split checks use this CWD-independent form instead.
+    """
+    path = Path(image_path)
+    if not path.is_absolute() and base_dir is not None:
+        path = Path(base_dir) / path
+    return Path(os.path.normpath(str(path)))
+
+
 def validate_no_leakage(
     train_manifest: Manifest,
     test_manifest: Manifest,
@@ -344,8 +354,8 @@ def validate_no_leakage(
         )
 
     # 2. Check image_path collisions
-    train_paths = {Path(r.image_path).resolve() for r in train_manifest}
-    test_paths = {Path(r.image_path).resolve() for r in test_manifest}
+    train_paths = {normalize_manifest_path(r.image_path) for r in train_manifest}
+    test_paths = {normalize_manifest_path(r.image_path) for r in test_manifest}
     path_overlap = train_paths & test_paths
     if path_overlap:
         sample_paths = [str(p) for p in sorted(list(path_overlap))[:5]]
@@ -527,13 +537,11 @@ def get_generator_membership_summary() -> dict[str, Any]:
         "protocol_version": "v1",
         "train_generators": PROTOCOL_V1_SPLITS["train"]["generators"],
         "in_domain_generators": PROTOCOL_V1_SPLITS["in_domain_test"]["generators"],
-        "near_ood_generators": PROTOCOL_V1_SPLITS["near_ood"]["generators"],
         "cross_generator_ood": PROTOCOL_V1_SPLITS["cross_generator_ood"]["generators"],
         "modern_external": PROTOCOL_V1_SPLITS["modern_external"]["generators"],
         "real_world_external": PROTOCOL_V1_SPLITS["real_world_external"]["generators"],
         "disjoint_guarantees": [
             "G_train ∩ G_cross_generator_ood = ∅",
-            "G_train ∩ G_near_ood = ∅",
         ],
         "scale_tiers": list(SCALE_TIERS.keys()),
     }
@@ -549,6 +557,7 @@ __all__ = [
     "assert_generator_disjoint",
     "create_scale_manifest",
     "get_generator_membership_summary",
+    "normalize_manifest_path",
     "subsample_manifest_by_class",
     "validate_no_leakage",
 ]

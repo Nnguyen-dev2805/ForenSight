@@ -386,6 +386,88 @@ def test_kaggle_runner_artifact_contract(tmp_path: Path):
     assert zip_path.exists() and zip_path.stat().st_size > 0
 
 
+def test_kaggle_audit_detects_train_val_content_duplicate():
+    """A byte-identical image shared by train and val must fail the audit.
+
+    Regression: the previous guard only compared sample_ids *within* the test splits,
+    so a genuine train/val content collision passed silently and training continued.
+    """
+    import hashlib
+    from deploy.kaggle.main import generate_dataset_audit
+
+    shared = hashlib.sha256(b"identical-bytes").hexdigest()
+    train = [
+        {"sample_id": "t1", "label": 0, "content_hash": shared},
+        {"sample_id": "t2", "label": 1, "content_hash": "train-only"},
+    ]
+    val = [
+        {"sample_id": "v1", "label": 0, "content_hash": shared},
+        {"sample_id": "v2", "label": 1, "content_hash": "val-only"},
+    ]
+
+    audit = generate_dataset_audit(train, val, [])
+    assert audit["status"] == "FAILED"
+    assert audit["leakage"]["train_val_overlap"] == 1
+    assert audit["leakage"]["exact_duplicates"] == 1
+
+
+def test_kaggle_audit_passes_on_disjoint_content_hashes():
+    """Distinct content hashes across all three partitions must pass the audit."""
+    from deploy.kaggle.main import generate_dataset_audit
+
+    train = [{"sample_id": "t1", "label": 0, "content_hash": "h1"}]
+    val = [{"sample_id": "v1", "label": 0, "content_hash": "h2"}]
+    test = [{"sample_id": "e1", "label": 1, "content_hash": "h3"}]
+
+    audit = generate_dataset_audit(train, val, test)
+    assert audit["status"] == "PASS"
+    assert audit["leakage"]["exact_duplicates"] == 0
+
+
+def test_kaggle_runner_refuses_to_train_on_leaked_splits(tmp_path: Path):
+    """Training must abort when the audit finds leakage, instead of logging and continuing.
+
+    Regression: the runner previously logged `Dataset audit completed: FAILED` and then
+    trained anyway, which is how a leaked run reached `results/`.
+    """
+    import pytest
+    from deploy.kaggle.main import train_and_eval_experiment
+    from torchvision import transforms
+
+    class MockDetector(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.trainable = torch.nn.Linear(2, 1)
+
+        def forward(self, clip_img=None, foren_img=None):
+            return self.trainable(clip_img[:, :2, 0, 0])
+
+    img = Image.new("RGB", (32, 32), color=(100, 100, 100))
+    img.save(tmp_path / "img.png")
+
+    shared = {"sample_id": "dup", "label": 0, "generator": "sd14", "content_hash": "same"}
+    leaked_splits = {
+        "train": [dict(shared, image_path="img.png", abs_path=str(tmp_path / "img.png"))],
+        "val": [dict(shared, image_path="img.png", abs_path=str(tmp_path / "img.png"))],
+        "in_domain_test": [],
+    }
+
+    with pytest.raises(RuntimeError, match="leakage audit FAILED"):
+        train_and_eval_experiment(
+            experiment_name="test_leak",
+            model=MockDetector(),
+            splits=leaked_splits,
+            clip_transform=transforms.ToTensor(),
+            forensic_transform=transforms.ToTensor(),
+            device=torch.device("cpu"),
+            output_dir=tmp_path,
+            epochs=1,
+            batch_size=1,
+            num_workers=0,
+            variant="semantic_only",
+        )
+
+
 def test_kaggle_seed_isolation(tmp_path: Path):
     """Verify that model weights are deterministic whether run alone or as part of a suite."""
     from deploy.kaggle.main import build_detector, set_seed
@@ -495,18 +577,29 @@ def test_kaggle_optimization_protocol(tmp_path: Path):
             return self.trainable(clip_img[:, :2, 0, 0])
 
     t = transforms.ToTensor()
+    # Six distinct records: train / val / test must be mutually disjoint, otherwise the
+    # leakage audit aborts before training.
     records = [
-        {"sample_id": f"s_{i}", "image_path": "fake.png", "abs_path": str(tmp_path / "img.png"), "label": i % 2, "generator": "sd14", "split": "train"}
-        for i in range(4)
+        {
+            "sample_id": f"s_{i}",
+            "image_path": f"img_{i}.png",
+            "abs_path": str(tmp_path / f"img_{i}.png"),
+            "label": i % 2,
+            "generator": "sd14",
+            "split": "train",
+            "content_hash": f"hash_{i}",
+        }
+        for i in range(6)
     ]
-    # Create fake image
-    img = Image.new("RGB", (32, 32), color=(100, 100, 100))
-    img.save(tmp_path / "img.png")
+    # Create one fake image per record
+    for i in range(6):
+        img = Image.new("RGB", (32, 32), color=(100, 100, 100))
+        img.save(tmp_path / f"img_{i}.png")
 
     dummy_splits = {
-        "train": records[:2],
+        "train": records[0:2],
         "val": records[2:4],
-        "in_domain_test": records[2:4],
+        "in_domain_test": records[4:6],
     }
 
     # 1. Semantic variant default learning rate: 1e-3
