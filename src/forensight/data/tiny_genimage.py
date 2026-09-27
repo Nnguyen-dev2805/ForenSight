@@ -12,11 +12,13 @@ but the canonical Stage-1 source is the Kaggle dataset.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import io
 import json
 import logging
 from pathlib import Path
 import random
+import re
 from typing import Any, Callable, Sequence
 
 import pyarrow.parquet as pq
@@ -134,16 +136,64 @@ def _generator_from_path(parts: Sequence[str]) -> str | None:
     return None
 
 
+@lru_cache(maxsize=1)
+def _imagenet_wnids() -> tuple[str, ...]:
+    """The 1000 ImageNet-1k WNIDs in class order (class 1 first).
+
+    Imported lazily: `timm` arrives with OpenCLIP, so this adds no dependency,
+    and deferring the import keeps `forensight.data` importable without it.
+    """
+    from timm.data.imagenet_info import ImageNetInfo
+
+    return tuple(ImageNetInfo("imagenet-1k").label_names())
+
+
+# ImageNet-1k validation holds 50 images per class, in class order.
+_IMAGENET_VAL_PER_CLASS = 50
+
+
 def _class_id_from_path(path: Path) -> str | None:
+    """Resolve an ImageNet WNID from a Tiny-GenImage filename.
+
+    Two encodings appear in the same dataset, and both must land in ONE
+    namespace or the class-balance audit reports a phantom real/fake imbalance:
+
+      - real, train:      `n01440764_5969.JPEG`      -> WNID already
+      - real, val/test:   `ILSVRC2012_val_00000001`  -> WNID by running index
+      - fake:             `001_sdv5_00094.png`       -> WNID by 1-based index
+
+    The 1-based reading of the fake prefix matches the documented ImageNet
+    ordering (class 1 = `n01440764`). Returns None when no class is encoded,
+    which is the honest answer for generators such as GLIDE and VQDM whose
+    filenames carry no class field.
+    """
     stem = path.stem
+
+    # Real images that already carry a WNID.
     if stem.startswith("n") and len(stem) > 9 and stem[1:9].isdigit():
         return stem.split("_")[0]
     for part in path.parts:
         if part.startswith("n") and len(part) == 9 and part[1:].isdigit():
             return part
+
+    # Real validation images named by their position in the ImageNet val split.
+    val_match = re.fullmatch(r"ILSVRC2012_val_(\d+)", stem)
+    if val_match:
+        index = int(val_match.group(1))
+        if index >= 1:
+            class_index = (index - 1) // _IMAGENET_VAL_PER_CLASS
+            wnids = _imagenet_wnids()
+            if class_index < len(wnids):
+                return wnids[class_index]
+        return None
+
+    # Fakes named with a 1-based class prefix.
     parts = stem.split("_")
     if len(parts) >= 2 and parts[0].isdigit():
-        return f"c{int(parts[0]):04d}"
+        one_based = int(parts[0])
+        wnids = _imagenet_wnids()
+        if 1 <= one_based <= len(wnids):
+            return wnids[one_based - 1]
     return None
 
 
@@ -468,6 +518,7 @@ def build_single_generator_manifests(
         )
 
     sorted_records = sorted(extracted_records, key=lambda r: str(r.get("sample_id", "")))
+    _assert_expected_generator_set(sorted_records, builder="build_single_generator_manifests")
 
     # Separate train and validation raw records
     train_reals = [r for r in sorted_records if r.get("raw_split") == "train" and r.get("label") == 0]
@@ -496,6 +547,7 @@ def build_single_generator_manifests(
             generator=r["generator"],
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": train_generator},
         )
         for r in selected_train_fakes
     ] + [
@@ -507,6 +559,7 @@ def build_single_generator_manifests(
             generator="nature",
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": train_generator},
         )
         for r in selected_train_reals
     ]
@@ -514,7 +567,13 @@ def build_single_generator_manifests(
     shuffled_val_reals = interleave_records_by_class(val_reals, seed=seed)
     real_offset = 0
 
-    def allocate_reals(n: int, split_name: str) -> list[ManifestRecord]:
+    def allocate_reals(n: int, split_name: str, cohort: str) -> list[ManifestRecord]:
+        """Take `n` reals without replacement and tag them with their cohort.
+
+        `cohort` names the generator whose fakes these reals serve as the negative
+        reference for, so the evaluator can pair each generator with exactly its
+        own held-out reals instead of the whole pooled real set.
+        """
         nonlocal real_offset
         allocated = shuffled_val_reals[real_offset : real_offset + n]
         real_offset += len(allocated)
@@ -527,6 +586,7 @@ def build_single_generator_manifests(
                 generator="nature",
                 split=split_name,
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": cohort},
             )
             for r in allocated
         ]
@@ -536,11 +596,11 @@ def build_single_generator_manifests(
         val_fakes_train_gen, val_ratio=val_in_domain_ratio, seed=seed
     )
 
-    val_allocated_reals = allocate_reals(len(val_part_fakes), "val")
+    val_allocated_reals = allocate_reals(len(val_part_fakes), "val", train_generator)
     if len(val_allocated_reals) < len(val_part_fakes):
         val_part_fakes = val_part_fakes[: len(val_allocated_reals)]
 
-    test_allocated_reals = allocate_reals(len(test_part_fakes), "in_domain_test")
+    test_allocated_reals = allocate_reals(len(test_part_fakes), "in_domain_test", train_generator)
     if len(test_allocated_reals) < len(test_part_fakes):
         test_part_fakes = test_part_fakes[: len(test_allocated_reals)]
 
@@ -553,6 +613,7 @@ def build_single_generator_manifests(
             generator=r["generator"],
             split="val",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": train_generator},
         )
         for r in val_part_fakes
     ] + val_allocated_reals
@@ -566,6 +627,7 @@ def build_single_generator_manifests(
             generator=r["generator"],
             split="in_domain_test",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": train_generator},
         )
         for r in test_part_fakes
     ] + test_allocated_reals
@@ -580,7 +642,7 @@ def build_single_generator_manifests(
             r for r in sorted_records
             if r.get("raw_split") == "validation" and r.get("generator") == gen_id and r.get("label") == 1
         ]
-        assigned_reals = allocate_reals(len(val_gen_fakes), "cross_generator_ood")
+        assigned_reals = allocate_reals(len(val_gen_fakes), "cross_generator_ood", gen_id)
         if len(assigned_reals) < len(val_gen_fakes):
             val_gen_fakes = val_gen_fakes[: len(assigned_reals)]
 
@@ -593,6 +655,7 @@ def build_single_generator_manifests(
                 generator=r["generator"],
                 split="cross_generator_ood",
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": gen_id},
             )
             for r in val_gen_fakes
         ] + assigned_reals
@@ -731,6 +794,7 @@ def build_logo_manifests(
             generator=r["generator"],
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": r["generator"]},
         )
         for r in selected_train_fakes
     ] + [
@@ -742,6 +806,7 @@ def build_logo_manifests(
             generator="nature",
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": "__train__"},
         )
         for r in selected_train_reals
     ]
@@ -749,7 +814,8 @@ def build_logo_manifests(
     shuffled_val_reals = interleave_records_by_class(val_reals, seed=seed)
     real_offset = 0
 
-    def allocate_reals(n: int, split_name: str) -> list[ManifestRecord]:
+    def allocate_reals(n: int, split_name: str, cohort: str) -> list[ManifestRecord]:
+        """Take `n` reals without replacement, tagged with the generator they serve."""
         nonlocal real_offset
         allocated = shuffled_val_reals[real_offset : real_offset + n]
         real_offset += len(allocated)
@@ -762,6 +828,7 @@ def build_logo_manifests(
                 generator="nature",
                 split=split_name,
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": cohort},
             )
             for r in allocated
         ]
@@ -788,10 +855,11 @@ def build_logo_manifests(
                 generator=gen,
                 split="val",
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": gen},
             )
             for r in cur_val_fakes
         ])
-        val_records.extend(allocate_reals(len(cur_val_fakes), "val"))
+        val_records.extend(allocate_reals(len(cur_val_fakes), "val", gen))
 
         test_seen_records.extend([
             ManifestRecord(
@@ -802,10 +870,11 @@ def build_logo_manifests(
                 generator=gen,
                 split="in_domain_test",
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": gen},
             )
             for r in cur_test_fakes
         ])
-        test_seen_records.extend(allocate_reals(len(cur_test_fakes), "in_domain_test"))
+        test_seen_records.extend(allocate_reals(len(cur_test_fakes), "in_domain_test", gen))
 
     # Build Held-out Test: fakes of leave_out_gen paired with available held-out validation reals.
     # Restrict to raw validation fakes so the held-out split matches the real side (which is
@@ -819,7 +888,7 @@ def build_logo_manifests(
     ]
     remaining_val_reals_count = max(0, len(val_reals) - real_offset)
     n_alloc = min(len(held_out_fakes), remaining_val_reals_count)
-    held_out_reals = allocate_reals(n_alloc, "cross_generator_ood")
+    held_out_reals = allocate_reals(n_alloc, "cross_generator_ood", leave_out_gen)
     held_out_fakes = held_out_fakes[: len(held_out_reals)]
 
     test_held_out_records = [
@@ -831,6 +900,7 @@ def build_logo_manifests(
             generator=leave_out_gen,
             split="cross_generator_ood",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": leave_out_gen},
         )
         for r in held_out_fakes
     ] + held_out_reals
@@ -932,6 +1002,7 @@ def build_all7_manifests(
             generator=r["generator"],
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": r["generator"]},
         )
         for r in selected_train_fakes
     ] + [
@@ -943,6 +1014,7 @@ def build_all7_manifests(
             generator="nature",
             split="train",
             class_id=r.get("class_id"),
+            metadata={"evaluation_generator": "__train__"},
         )
         for r in selected_train_reals
     ]
@@ -950,7 +1022,8 @@ def build_all7_manifests(
     shuffled_val_reals = interleave_records_by_class(val_reals, seed=seed)
     real_offset = 0
 
-    def allocate_reals(n: int, split_name: str) -> list[ManifestRecord]:
+    def allocate_reals(n: int, split_name: str, cohort: str) -> list[ManifestRecord]:
+        """Take `n` reals without replacement, tagged with the generator they serve."""
         nonlocal real_offset
         allocated = shuffled_val_reals[real_offset : real_offset + n]
         real_offset += len(allocated)
@@ -963,6 +1036,7 @@ def build_all7_manifests(
                 generator="nature",
                 split=split_name,
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": cohort},
             )
             for r in allocated
         ]
@@ -990,12 +1064,13 @@ def build_all7_manifests(
                 generator=gen,
                 split="val",
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": gen},
             )
             for r in cur_val_fakes
         ])
-        val_records.extend(allocate_reals(len(cur_val_fakes), "val"))
+        val_records.extend(allocate_reals(len(cur_val_fakes), "val", gen))
 
-        cur_test_reals = allocate_reals(len(cur_test_fakes), "in_domain_test")
+        cur_test_reals = allocate_reals(len(cur_test_fakes), "in_domain_test", gen)
         cur_test_records = [
             ManifestRecord(
                 sample_id=r["sample_id"],
@@ -1005,6 +1080,7 @@ def build_all7_manifests(
                 generator=gen,
                 split="in_domain_test",
                 class_id=r.get("class_id"),
+                metadata={"evaluation_generator": gen},
             )
             for r in cur_test_fakes
         ] + cur_test_reals

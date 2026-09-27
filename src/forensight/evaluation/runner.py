@@ -857,15 +857,33 @@ def evaluate_predictions(
 
         unique_labels = set(sub_gen.y_true)
         if len(unique_labels) == 1 and 1 in unique_labels and eval_reals:
-            # Synthetic generator holding only fakes: pair it with reference reals, preferring
-            # reals from the same split(s). Reals come from a single source population
-            # (ImageNet) that is partitioned without replacement across evaluation splits,
-            # and training/validation records are already excluded from `eval_reals`, so
-            # falling back to sibling-split reals does not contaminate the slice -- it only
-            # changes which held-out reals serve as the negative reference.
+            # Synthetic generator holding only fakes: pair it with reference reals.
+            #
+            # Prefer the exact cohort the manifest assigned to this generator
+            # (`evaluation_generator`). The single/OOD protocol places every unseen
+            # generator in one shared `cross_generator_ood` split, each with its own
+            # disjoint real cohort; pairing by split alone would hand every generator
+            # the same pooled reals and make their confusion matrices identical.
+            #
+            # Fallbacks, in order: the tagged cohort, then reals from the same
+            # split(s), then the whole evaluation real pool. The looser fallbacks
+            # exist only for legacy/synthetic prediction sets that carry no cohort
+            # tags; reals are still a single source population partitioned without
+            # replacement, so no reals leak in from train or validation.
+            cohort_reals = [
+                r for r in eval_reals
+                if r.metadata.get("evaluation_generator") == g
+            ]
             gen_splits = {r.split for r in sub_gen if r.split is not None}
-            matching_reals = [r for r in eval_reals if r.split in gen_splits] if gen_splits else []
-            paired_reals = matching_reals if matching_reals else eval_reals
+            split_reals = [r for r in eval_reals if r.split in gen_splits] if gen_splits else []
+
+            if cohort_reals:
+                paired_reals = cohort_reals
+            elif split_reals:
+                paired_reals = split_reals
+            else:
+                paired_reals = eval_reals
+
             paired_records = list(sub_gen) + paired_reals
             gen_y_true = np.array([r.label for r in paired_records], dtype=int)
             gen_y_scores = np.array([r.score for r in paired_records], dtype=np.float64)

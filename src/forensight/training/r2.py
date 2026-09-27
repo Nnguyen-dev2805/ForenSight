@@ -88,12 +88,20 @@ def build_r2_model(
 
 
 def set_seed(seed: int) -> None:
-    """Set random seed across python standard library, numpy, and pytorch."""
+    """Set random seed across python stdlib, numpy, and pytorch, and pin cuDNN.
+
+    The cuDNN flags matter as much as the RNG seeds: with `benchmark=True` cuDNN
+    picks convolution algorithms by timing heuristics, so two runs of the same
+    seed can still diverge. `torch.use_deterministic_algorithms(True)` is
+    deliberately NOT enabled -- it rejects some CUDA ops this model needs.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def load_r2_config(path: str | Path) -> dict[str, Any]:
@@ -341,6 +349,12 @@ def predict_to_prediction_set(
                     generator=str(batch["generator"][index]),
                     dataset=str(batch["dataset"][index]),
                     path=img_path,
+                    metadata={
+                        # Absent for hand-built batches that bypass R2ImageDataset.
+                        "evaluation_generator": str(
+                            batch["evaluation_generator"][index]
+                        ) if "evaluation_generator" in batch else "",
+                    },
                 )
             )
 

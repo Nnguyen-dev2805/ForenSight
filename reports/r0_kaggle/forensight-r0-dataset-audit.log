@@ -1,0 +1,138 @@
+[{"stream_name":"stdout","time":1.429106171,"data":"================================================================================\n"}
+,{"stream_name":"stdout","time":1.43035114,"data":" FORENSIGHT MILESTONE R0: DATASET \u0026 CONFOUND AUDIT\n"}
+,{"stream_name":"stdout","time":1.43035613,"data":" Canonical Protocol: yangsangtai/tiny-genimage (7 Generators)\n"}
+,{"stream_name":"stdout","time":1.43035847,"data":"================================================================================\n"}
+,{"stream_name":"stdout","time":1.434707998,"data":"Dataset root: /kaggle/input/datasets/yangsangtai/tiny-genimage\n"}
+,{"stream_name":"stderr","time":1.434716447,"data":"02:09:06 [INFO] Found dataset root via recursive walk: /kaggle/input/datasets/yangsangtai/tiny-genimage (subdirs: ['imagenet_ai_0424_wukong', 'imagenet_glide', 'imagenet_ai_0419_biggan', 'imagenet_ai_0419_vqdm', 'imagenet_midjourney'])\n"}
+,{"stream_name":"stderr","time":1.434813657,"data":"02:09:06 [INFO] Scanning dataset root: /kaggle/input/datasets/yangsangtai/tiny-genimage\n"}
+,{"stream_name":"stderr","time":59.780059533,"data":"02:10:04 [INFO] Found 35000 image files. Parsing paths and generators...\n"}
+,{"stream_name":"stderr","time":90.52027748,"data":"02:10:35 [INFO] Scan completed: 35000 total valid records.\n"}
+,{"stream_name":"stderr","time":90.52034988,"data":"02:10:35 [INFO] Found fake generators: ['adm', 'biggan', 'glide', 'midjourney', 'sd15', 'vqdm', 'wukong']\n"}
+,{"stream_name":"stderr","time":90.52180791,"data":"02:10:35 [INFO] Real images found: 17500\n"}
+,{"stream_name":"stdout","time":90.619200478,"data":"\n"}
+,{"stream_name":"stdout","time":90.619238588,"data":"Manifests generated under /kaggle/working/manifests/:\n"}
+,{"stream_name":"stdout","time":90.619572698,"data":"  - train               :  4000 images (real: 2000, fake: 2000) | generators: ['sd15']\n"}
+,{"stream_name":"stdout","time":90.619591488,"data":"  - val                 :   500 images (real:  250, fake:  250) | generators: ['sd15']\n"}
+,{"stream_name":"stdout","time":90.619630298,"data":"  - in_domain_test      :   500 images (real:  250, fake:  250) | generators: ['sd15']\n"}
+,{"stream_name":"stdout","time":90.620245698,"data":"  - cross_generator_ood :  6000 images (real: 3000, fake: 3000) | generators: ['adm', 'biggan', 'glide', 'midjourney', 'vqdm', 'wukong']\n"}
+,{"stream_name":"stdout","time":98.781212131,"data":"\n"}
+,{"stream_name":"stdout","time":98.781258151,"data":"Leakage Audit Status: PASSED [OK]\n"}
+,{"stream_name":"stdout","time":98.781263691,"data":"\n"}
+,{"stream_name":"stdout","time":98.781268151,"data":"Extracting physical and compression attributes across all samples...\n"}
+,{"stream_name":"stdout","time":98.781318291,"data":"Total samples to audit: 11000\n"}
+,{"stream_name":"stdout","time":101.494468069,"data":"  Progress: 2000/11000 (18.2%)...\n"}
+,{"stream_name":"stdout","time":103.017051501,"data":"  Progress: 4000/11000 (36.4%)...\n"}
+,{"stream_name":"stdout","time":104.670468679,"data":"  Progress: 6000/11000 (54.5%)...\n"}
+,{"stream_name":"stdout","time":106.952737667,"data":"  Progress: 8000/11000 (72.7%)...\n"}
+,{"stream_name":"stdout","time":108.521176962,"data":"  Progress: 10000/11000 (90.9%)...\n"}
+,{"stream_name":"stdout","time":109.300494346,"data":"  Progress: 11000/11000 (100.0%)...\n"}
+,{"stream_name":"stdout","time":109.40221212,"data":"\n"}
+,{"stream_name":"stdout","time":109.40224817000001,"data":"================================================================================\n"}
+,{"stream_name":"stdout","time":109.40225427,"data":" AUDIT COMPLETED SUCCESSFULLY\n"}
+,{"stream_name":"stdout","time":109.40225755,"data":" Report Markdown saved: /kaggle/working/r0_dataset_audit.md\n"}
+,{"stream_name":"stdout","time":109.4022793,"data":" Report JSON saved:     /kaggle/working/r0_dataset_audit.json\n"}
+,{"stream_name":"stdout","time":109.40228157,"data":" Bundle ZIP saved:       /kaggle/working/r0_audit_artifacts.zip\n"}
+,{"stream_name":"stdout","time":109.40228355,"data":"================================================================================\n"}
+,{"stream_name":"stdout","time":109.40228566,"data":"\n"}
+,{"stream_name":"stdout","time":109.40228758,"data":"# ForenSight Milestone R0 Dataset \u0026 Confound Audit Report\n"}
+,{"stream_name":"stdout","time":109.40229,"data":"\n"}
+,{"stream_name":"stdout","time":109.40229192,"data":"**Date:** 2026-09-27 02:10:54 UTC  \n"}
+,{"stream_name":"stdout","time":109.40229387,"data":"**Dataset Source:** `yangsangtai/tiny-genimage`  \n"}
+,{"stream_name":"stdout","time":109.40229583,"data":"**Execution Environment:** Kaggle CPU  \n"}
+,{"stream_name":"stdout","time":109.40229772,"data":"**Total Images Audited:** 11000 (5500 Real, 5500 Fake, 0 Corrupt)  \n"}
+,{"stream_name":"stdout","time":109.4022997,"data":"**Audit Duration:** 107.9s  \n"}
+,{"stream_name":"stdout","time":109.40230162,"data":"\n"}
+,{"stream_name":"stdout","time":109.40230347,"data":"---\n"}
+,{"stream_name":"stdout","time":109.40230542,"data":"\n"}
+,{"stream_name":"stdout","time":109.4023073,"data":"## 1. Executive Summary \u0026 Gate Status\n"}
+,{"stream_name":"stdout","time":109.40230935,"data":"\n"}
+,{"stream_name":"stdout","time":109.4023112,"data":"| Check | Status | Severity | Summary Finding / Literature Confound |\n"}
+,{"stream_name":"stdout","time":109.40231322,"data":"| :--- | :---: | :---: | :--- |\n"}
+,{"stream_name":"stdout","time":109.40231515,"data":"| **Cross-Split Leakage** | ✅ PASS | `INFO` | Zero sample ID, path, or generator leakage between train and test/OOD. |\n"}
+,{"stream_name":"stdout","time":109.40231822,"data":"| **Resolution \u0026 Aspect Ratio Confound** | ⚠️ WARN | `WARNING` | Resolution \u0026 aspect ratio confound confirmed: Real images have variable dimensions (width std=191.59px, aspect ratio 1.19 ± 0.31), while Fake images are strictly square (aspect ratio 1.0 ± 0.0) with fixed discrete generator resolutions (BigGAN 128px, ADM/GLIDE/VQDM 256px, SD1.5/Wukong 512px, Midjourney 1024px). |\n"}
+,{"stream_name":"stdout","time":109.40232188,"data":"| **JPEG Compression Confound** | ⚠️ WARN | `WARNING` | JPEG quality distributions are NOT comparable: Real is 100% JPEG (mean Q=93.07 ± 7.55), while Fake is 0% JPEG (100% PNG, lossless). Severe format and compression confound. |\n"}
+,{"stream_name":"stdout","time":109.4023242,"data":"| **File Format Confound** | ⚠️ WARN | `WARNING` | Format disparity confirmed: Real is 100.0% JPEG vs Fake 0.0% JPEG (difference: 100.0%). |\n"}
+,{"stream_name":"stdout","time":109.40232627,"data":"| **Exact Duplicate Leakage** | ✅ PASS | `INFO` | Zero exact SHA-256 duplicates detected across splits. |\n"}
+,{"stream_name":"stdout","time":109.40232976,"data":"\n"}
+,{"stream_name":"stdout","time":109.40233289,"data":"---\n"}
+,{"stream_name":"stdout","time":109.40233568,"data":"\n"}
+,{"stream_name":"stdout","time":109.40233755,"data":"## 2. Protocol Manifest Allocations (Zero-Leakage Guarantee)\n"}
+,{"stream_name":"stdout","time":109.40233952,"data":"\n"}
+,{"stream_name":"stdout","time":109.40234136,"data":"| Partition / Split | Total Samples | Real (Nature) | Fake (Synthetic) | Generator Coverage |\n"}
+,{"stream_name":"stdout","time":109.40234337,"data":"| :--- | :---: | :---: | :---: | :--- |\n"}
+,{"stream_name":"stdout","time":109.40234653,"data":"| **train** | 4000 | 2000 | 2000 | `['sd15']` |\n"}
+,{"stream_name":"stdout","time":109.40235183,"data":"| **val** | 500 | 250 | 250 | `['sd15']` (Disjoint val cohort) |\n"}
+,{"stream_name":"stdout","time":109.40235383,"data":"| **in_domain_test** | 500 | 250 | 250 | `['sd15']` (Held-out in-domain) |\n"}
+,{"stream_name":"stdout","time":109.40235581,"data":"| **cross_generator_ood** | 6000 | 3000 | 3000 | `['adm', 'biggan', 'glide', 'midjourney', 'vqdm', 'wukong']` |\n"}
+,{"stream_name":"stdout","time":109.40235778,"data":"\n"}
+,{"stream_name":"stdout","time":109.40235964,"data":"*Guarantees: Zero generator leakage into train/val. Zero sample ID or file path overlap across partitions.*\n"}
+,{"stream_name":"stdout","time":109.40236163,"data":"\n"}
+,{"stream_name":"stdout","time":109.40236383,"data":"---\n"}
+,{"stream_name":"stdout","time":109.4024007,"data":"\n"}
+,{"stream_name":"stdout","time":109.40240821,"data":"## 3. Literature Confound Analysis (GenImage Benchmarks)\n"}
+,{"stream_name":"stdout","time":109.40241124,"data":"\n"}
+,{"stream_name":"stdout","time":109.40241406,"data":"### 3.1 Spatial Resolution Disparity\n"}
+,{"stream_name":"stdout","time":109.40241708,"data":"Detectors risk learning spatial resolution shortcuts if synthetic images have fixed dimensions (e.g. 512x512) while authentic images vary widely.\n"}
+,{"stream_name":"stdout","time":109.40242037,"data":"\n"}
+,{"stream_name":"stdout","time":109.4024232,"data":"| Class | Count | Width Mean ± Std | Width Median | Height Mean ± Std | Height Median |\n"}
+,{"stream_name":"stdout","time":109.40242641,"data":"| :--- | :---: | :---: | :---: | :---: | :---: |\n"}
+,{"stream_name":"stdout","time":109.40242979,"data":"| **Real (Authentic)** | 5500 | 483.99 ± 191.59 | 500.0 px | 421.44 ± 163.21 | 375.0 px |\n"}
+,{"stream_name":"stdout","time":109.40243284,"data":"| **Fake (Synthetic)** | 5500 | 453.82 ± 227.45 | 512.0 px | 453.82 ± 227.45 | 512.0 px |\n"}
+,{"stream_name":"stdout","time":109.40243602,"data":"\n"}
+,{"stream_name":"stdout","time":109.40243889,"data":"### 3.2 JPEG Compression Quality ($Q \\in [1, 100]$ via DQT Inversion)\n"}
+,{"stream_name":"stdout","time":109.40244095,"data":"Detectors risk learning compression artifacts if real and synthetic images come from different compression regimes.\n"}
+,{"stream_name":"stdout","time":109.40244296,"data":"\n"}
+,{"stream_name":"stdout","time":109.40244477,"data":"| Class | Total JPEGs | Mean Q ± Std | Median Q | Q \u003c 50 | Q 50-70 | Q 71-80 | Q 81-90 | Q 91-95 | Q 96-100 |\n"}
+,{"stream_name":"stdout","time":109.40244693,"data":"| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n"}
+,{"stream_name":"stdout","time":109.40244894,"data":"| **Real** | 5500 | 93.07 ± 7.55 | 96.0 | 12 | 107 | 453 | 305 | 262 | 4361 |\n"}
+,{"stream_name":"stdout","time":109.40245097,"data":"| **Fake** | 0 | None ± None | None | 0 | 0 | 0 | 0 | 0 | 0 |\n"}
+,{"stream_name":"stdout","time":109.40245293,"data":"\n"}
+,{"stream_name":"stdout","time":109.40245475,"data":"### 3.3 Generator-by-Generator Breakdown\n"}
+,{"stream_name":"stdout","time":109.40245667,"data":"\n"}
+,{"stream_name":"stdout","time":109.40245854,"data":"| Generator | Images | Format Dist | Width (Mean ± Std) | JPEG Q (Mean ± Std) | % JPEG |\n"}
+,{"stream_name":"stdout","time":109.40246057,"data":"| :--- | :---: | :--- | :---: | :---: | :---: |\n"}
+,{"stream_name":"stdout","time":109.40246248,"data":"| **`nature`** | 5500 | JPEG: 100% | 483.99 ± 191.59 | 93.07 ± 7.55 | 100.0% |\n"}
+,{"stream_name":"stdout","time":109.4024645,"data":"| **`sd15`** | 2500 | PNG: 100% | 512.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.4024665,"data":"| **`adm`** | 500 | PNG: 100% | 256.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.40247269,"data":"| **`biggan`** | 500 | PNG: 100% | 128.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.40247477,"data":"| **`glide`** | 500 | PNG: 100% | 256.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.4024772,"data":"| **`midjourney`** | 500 | PNG: 100% | 1024.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.40247927,"data":"| **`vqdm`** | 500 | PNG: 100% | 256.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.40248145,"data":"| **`wukong`** | 500 | PNG: 100% | 512.0 ± 0.0 | None ± None | 0.0% |\n"}
+,{"stream_name":"stdout","time":109.40248344,"data":"\n"}
+,{"stream_name":"stdout","time":109.40248526,"data":"---\n"}
+,{"stream_name":"stdout","time":109.40248711,"data":"\n"}
+,{"stream_name":"stdout","time":109.40248894,"data":"## 4. Confound Analysis \u0026 Research Integrity Assessment\n"}
+,{"stream_name":"stdout","time":109.40249097,"data":"\n"}
+,{"stream_name":"stdout","time":109.40249281,"data":"### 4.1 Gate Status Summary\n"}
+,{"stream_name":"stdout","time":109.40249479,"data":"- **Split protocol:** ✅ PASS (disjoint partitions, balanced classes)\n"}
+,{"stream_name":"stdout","time":109.40249682,"data":"- **Generator isolation:** ✅ PASS (zero OOD leakage into train/val)\n"}
+,{"stream_name":"stdout","time":109.40249878,"data":"- **ID \u0026 Path leakage:** ✅ PASS (zero sample ID or file path overlap)\n"}
+,{"stream_name":"stdout","time":109.40250082,"data":"- **Exact duplicate check:** ✅ PASS (zero cross-split SHA-256 collisions across all 11,000 images)\n"}
+,{"stream_name":"stdout","time":109.40250286,"data":"- **Observed format confound:** ⚠️ **CONFIRMED** (Real is 100% JPEG vs Fake is 100% PNG)\n"}
+,{"stream_name":"stdout","time":109.40250489,"data":"- **Observed resolution bias:** ⚠️ **CONFIRMED** (Real is variable/non-square vs Fake is fixed square per-generator)\n"}
+,{"stream_name":"stdout","time":109.40250695,"data":"- **Confound mitigation:** ❌ **NOT YET PROVEN** (Hypothesis only)\n"}
+,{"stream_name":"stdout","time":109.40250893,"data":"\n"}
+,{"stream_name":"stdout","time":109.40251079,"data":"### 4.2 Critical Technical Risks for Milestone R2\n"}
+,{"stream_name":"stdout","time":109.40251274,"data":"1. **Pixel-Grid Compression Traces:**\n"}
+,{"stream_name":"stdout","time":109.40251469,"data":"   - Standard decoding (`PIL.Image.open(...).convert(\"RGB\")`) maps byte streams to RGB pixel values. It does **not** erase the block boundary discontinuities, ringing, or high-frequency quantization artifacts embedded in JPEG pixels.\n"}
+,{"stream_name":"stdout","time":109.40251756,"data":"2. **Resampling \u0026 Interpolation Footprints:**\n"}
+,{"stream_name":"stdout","time":109.40252079,"data":"   - Standardizing to 224x224 forces asymmetric spatial transformations across generators: BigGAN (128x128) undergoes bicubic upsampling, whereas Midjourney (1024x1024) undergoes downsampling. These leave characteristic spectral/interpolation footprints that CNNs can easily exploit.\n"}
+,{"stream_name":"stdout","time":109.40252446,"data":"3. **NPR Residual Interaction with JPEG:**\n"}
+,{"stream_name":"stdout","time":109.40252643,"data":"   - The Neighboring Pixel Residual transform ($r = x - f_{low}(x)$) isolates high-frequency components. Because JPEG blocking artifacts (8x8 DCT grid edges) are also high-frequency, NPR may amplify rather than suppress compression shortcuts.\n"}
+,{"stream_name":"stdout","time":109.40252874,"data":"\n"}
+,{"stream_name":"stdout","time":109.40253056,"data":"### 4.3 Prerequisite for Milestone R2 Seal\n"}
+,{"stream_name":"stdout","time":109.40253522,"data":"- The presence of severe format and resolution shortcuts is confirmed on `yangsangtai/tiny-genimage`.\n"}
+,{"stream_name":"stdout","time":109.40253764,"data":"- Before claiming generalizability or forensic perception validity in R2, the research team must decide whether to:\n"}
+,{"stream_name":"stdout","time":109.40253974,"data":"  (a) Train baseline R2 models as-is to empirically measure susceptibility to these shortcuts; or\n"}
+,{"stream_name":"stdout","time":109.40254181,"data":"  (b) Implement explicit bias-control preprocessing (e.g. JPEG recompression of synthetic images, anti-aliasing filters) with dedicated versioning before sealing the evaluation protocol.\n"}
+,{"stream_name":"stdout","time":109.40254408,"data":"\n"}
+,{"stream_name":"stdout","time":109.40254596,"data":"*Report automatically generated by ForenSight Milestone R0 Kernel on Kaggle.*\n"}
+,{"stream_name":"stdout","time":109.40254795,"data":"\n"}
+,{"stream_name":"stderr","time":111.85575219,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":111.85578739,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":112.272227949,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":112.272265949,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":114.298551748,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":115.932205574,"data":"[NbConvertApp] Writing 479394 bytes to __results__.html\n"}
+]

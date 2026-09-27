@@ -86,6 +86,52 @@ def test_kaggle_bundle_carries_exact_source_and_sealed_manifests(tmp_path):
     assert json.loads((bundle / "run_config.json").read_text()) == prepared
 
 
+def test_kaggle_bundle_code_digest_is_stable_across_kernel_identity(tmp_path):
+    """Variant kernels must agree on the code digest but not the full payload.
+
+    `source_payload_sha256` covers the whole staged bundle, so it necessarily
+    differs between variant kernels (their kernel-metadata.json differs). The
+    code digest covers only canonical source, so it must be identical -- that is
+    what makes cross-variant results comparable.
+    """
+    repo = tmp_path / "repo"
+    kernel = _repo_with_single_manifests(repo)
+    other = repo / "deploy" / "kaggle_semantic"
+    other.mkdir(parents=True)
+    (other / "kernel-metadata.json").write_text(
+        '{"id": "user/forensight-r2-semantic-training", "code_file": "main.py"}'
+    )
+
+    config = {
+        "experiment": "single", "variant": "fusion", "seed": 42,
+        "dataset_ref": "yangsangtai/tiny-genimage/versions/1",
+    }
+    fusion = prepare_official_bundle(repo, kernel, tmp_path / "b_fusion", dict(config))
+    semantic = prepare_official_bundle(repo, other, tmp_path / "b_semantic", dict(config))
+
+    assert len(fusion["code_payload_sha256"]) == 64
+    assert fusion["code_payload_sha256"] == semantic["code_payload_sha256"]
+    assert fusion["source_payload_sha256"] != semantic["source_payload_sha256"]
+
+
+def test_kaggle_bundle_code_digest_ignores_run_specific_manifests(tmp_path):
+    """The code digest must not move when only run inputs change."""
+    repo = tmp_path / "repo"
+    kernel = _repo_with_single_manifests(repo)
+    config = {
+        "experiment": "single", "variant": "fusion", "seed": 42,
+        "dataset_ref": "yangsangtai/tiny-genimage/versions/1",
+    }
+    first = prepare_official_bundle(repo, kernel, tmp_path / "b1", dict(config))
+
+    # Change a sealed manifest: the full payload changes, canonical code does not.
+    (repo / "data" / "manifests" / "single" / "train.jsonl").write_text('{"changed": true}\n')
+    second = prepare_official_bundle(repo, kernel, tmp_path / "b2", dict(config))
+
+    assert first["code_payload_sha256"] == second["code_payload_sha256"]
+    assert first["source_payload_sha256"] != second["source_payload_sha256"]
+
+
 def test_kaggle_bundle_rejects_unpinned_source_or_missing_manifests(tmp_path):
     repo = tmp_path / "repo"
     kernel = _repo_with_single_manifests(repo)
@@ -143,7 +189,7 @@ def test_official_kernel_uses_shared_code_and_staged_manifests(tmp_path):
 
     with patch("scripts.check_dataset.main", return_value=0) as audit, \
          patch("scripts.train_r2.main", return_value=0) as train, \
-         patch("scripts.evaluate_r2.main", return_value=0) as evaluate:
+         patch("scripts.evaluate_r2.main", side_effect=_fake_evaluate_writing_canonical_report) as evaluate:
         run_dir = official.run_official(tmp_path, raw_root)
 
     assert "--train-manifest" in audit.call_args.args[0]
@@ -265,7 +311,7 @@ def test_logo_folds_use_distinct_output_directories(tmp_path):
     outputs = []
     with patch("scripts.check_dataset.main", return_value=0), \
          patch("scripts.train_r2.main", return_value=0), \
-         patch("scripts.evaluate_r2.main", return_value=0):
+         patch("scripts.evaluate_r2.main", side_effect=_fake_evaluate_writing_canonical_report):
         for leave_out in ("adm", "biggan"):
             (tmp_path / "run_config.json").write_text(json.dumps({
                 "experiment": "logo", "leave_out": leave_out,
@@ -277,6 +323,95 @@ def test_logo_folds_use_distinct_output_directories(tmp_path):
     assert outputs[0] != outputs[1]
     assert "leave_adm" in str(outputs[0])
     assert "leave_biggan" in str(outputs[1])
+
+
+def _multi_seed_repo(tmp_path: Path, seeds: list[int]) -> Path:
+    """Repo + run_config for a multi-seed single run, ready for run_official."""
+    _repo_with_single_manifests(tmp_path)
+    (tmp_path / "run_config.json").write_text(json.dumps({
+        "experiment": "single", "variant": "fusion", "seeds": seeds,
+        "dataset_ref": "yangsangtai/tiny-genimage/versions/1",
+    }))
+    raw_root = tmp_path / "raw"
+    raw_root.mkdir()
+    return raw_root
+
+
+def _fake_evaluate_writing_canonical_report(args: list[str]) -> int:
+    """Stand in for evaluate_r2: write the report at the path it was asked for.
+
+    `scripts/evaluate_r2.py` writes to `--report-json` when given, and otherwise
+    defaults to `evaluation.json` inside `--output-dir`. Mirroring both keeps
+    these tests honest about what the real entrypoint produces.
+    """
+    if "--report-json" in args:
+        target = Path(args[args.index("--report-json") + 1])
+    else:
+        target = Path(args[args.index("--output-dir") + 1]) / "evaluation.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "overall": {
+            "auroc": 0.5, "accuracy": 0.5, "f1": 0.5, "precision": 0.5, "recall": 0.5,
+            "threshold": 0.5, "threshold_source": "val_optimal_f1",
+            "confusion_matrix": {"tp": 1, "fp": 1, "tn": 1, "fn": 1},
+        },
+    }))
+    return 0
+
+
+def test_official_multi_seed_aggregates_reports_that_evaluate_r2_writes(tmp_path):
+    """Aggregation must receive the report path evaluate_r2 actually produces.
+
+    Regression: official.py collected `run_dir/"eval_report.json"` while
+    evaluate_r2 writes `run_dir/"evaluation.json"`, so every multi-seed run
+    handed aggregate_runs non-existent paths and produced no aggregated report.
+    """
+    from deploy.kaggle import official
+
+    raw_root = _multi_seed_repo(tmp_path, [42, 43])
+    seen: dict = {}
+
+    def fake_aggregate(args: list[str]) -> int:
+        # Collect exactly the operands of --reports (stops at the next flag).
+        rest = args[args.index("--reports") + 1:]
+        reports = []
+        for token in rest:
+            if token.startswith("--"):
+                break
+            reports.append(token)
+        seen["reports"] = reports
+        seen["all_exist"] = all(Path(a).is_file() for a in reports)
+        return 0
+
+    with patch("scripts.check_dataset.main", return_value=0), \
+         patch("scripts.train_r2.main", return_value=0), \
+         patch("scripts.evaluate_r2.main", side_effect=_fake_evaluate_writing_canonical_report), \
+         patch("scripts.aggregate_runs.main", side_effect=fake_aggregate):
+        official.run_official(tmp_path, raw_root)
+
+    assert seen["reports"], "aggregate_runs was never invoked for a multi-seed run"
+    assert seen["all_exist"], (
+        f"aggregate_runs was handed reports that do not exist: {seen['reports']}"
+    )
+
+
+def test_official_multi_seed_fails_loudly_when_aggregation_fails(tmp_path):
+    """A failed aggregation must abort, not silently return a partial run.
+
+    Regression: official.py ignored aggregate_runs' return code, so a broken
+    aggregation produced a run directory with no aggregated_report.json and no
+    error signal.
+    """
+    from deploy.kaggle import official
+
+    raw_root = _multi_seed_repo(tmp_path, [42, 43])
+
+    with patch("scripts.check_dataset.main", return_value=0), \
+         patch("scripts.train_r2.main", return_value=0), \
+         patch("scripts.evaluate_r2.main", side_effect=_fake_evaluate_writing_canonical_report), \
+         patch("scripts.aggregate_runs.main", return_value=1):
+        with pytest.raises(RuntimeError, match="aggregat"):
+            official.run_official(tmp_path, raw_root)
 
 
 def test_prepare_mode_keeps_same_split_across_training_seeds(tmp_path):
@@ -316,7 +451,7 @@ def test_official_run_exports_generated_manifest_provenance(tmp_path):
 
     with patch("scripts.check_dataset.main", return_value=0), \
          patch("scripts.train_r2.main", return_value=0), \
-         patch("scripts.evaluate_r2.main", return_value=0):
+         patch("scripts.evaluate_r2.main", side_effect=_fake_evaluate_writing_canonical_report):
         run_dir = official.run_official(tmp_path, raw_root)
 
     assert json.loads((run_dir / "manifest_provenance.json").read_text()) == json.loads(source.read_text())

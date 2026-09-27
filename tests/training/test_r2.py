@@ -197,6 +197,48 @@ def test_load_checkpoint_rejects_mismatched_trainable_keys(tmp_path: Path):
         load_checkpoint(path, nn.Linear(8, 8), map_location="cpu")
 
 
+def test_set_seed_pins_cudnn_to_deterministic(monkeypatch):
+    """Seed 42 must pin cuDNN, not just the RNGs.
+
+    Without the deterministic flags, convolution algorithms are chosen by
+    benchmark heuristics and two runs of the same seed can differ.
+    """
+    import torch.backends.cudnn as cudnn
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "manual_seed_all", lambda seed: None)
+    monkeypatch.setattr(cudnn, "deterministic", False)
+    monkeypatch.setattr(cudnn, "benchmark", True)
+
+    set_seed(42)
+
+    assert cudnn.deterministic is True
+    assert cudnn.benchmark is False
+
+
+def test_report_configs_lock_seed42_five_epochs_and_openai_quickgelu():
+    """Pin the seed-42 five-epoch reporting profile.
+
+    The OpenAI ViT-L/14 checkpoint was trained with QuickGELU, so the plain
+    `ViT-L-14` architecture (which uses GELU) is not weight-compatible with
+    `pretrained="openai"`. The semantic branch must therefore name the
+    QuickGELU variant explicitly, or the frozen encoder silently runs the
+    wrong activation function.
+    """
+    expected = {
+        "semantic": (42, 5, "ViT-L-14-quickgelu"),
+        "forensic": (42, 5, "ViT-L-14"),
+        "fusion": (42, 5, "ViT-L-14-quickgelu"),
+    }
+    for variant, (seed, epochs, clip_model) in expected.items():
+        config = load_r2_config(Path("configs/r2") / f"{variant}.json")
+        assert config["seed"] == seed, f"{variant}: seed must be {seed}"
+        assert config["training"]["epochs"] == epochs, f"{variant}: epochs must be {epochs}"
+        assert config["model"]["clip_model"] == clip_model, (
+            f"{variant}: clip_model must be {clip_model}"
+        )
+
+
 def test_load_r2_config_validation(tmp_path: Path):
     cfg_file = tmp_path / "bad.json"
     cfg_file.write_text(json.dumps({"variant": "invalid"}))
@@ -593,6 +635,130 @@ def test_evaluate_r2_experiment_mode_persists_artifacts(tmp_path):
     assert json.loads((out_dir / "evaluation.json").read_text())["run_metadata"]["dataset_revision"] == "synthetic-test-v1"
     test_ids = [r.sample_id for r in Manifest.from_jsonl(out_dir / "test_manifest.jsonl")]
     assert test_ids == ["t1", "o1"]
+
+
+def _single_manifest_fixture(tmp_path):
+    """Two-class single-protocol fixture: 1 val real, 1 in-domain fake, 1 OOD fake."""
+    from forensight.data.split import Manifest, ManifestRecord
+    from PIL import Image
+
+    manifest_dir = tmp_path / "manifests"
+    single_dir = manifest_dir / "single"
+    single_dir.mkdir(parents=True)
+    images = [tmp_path / f"image_{i}.png" for i in range(8)]
+    for i, image in enumerate(images):
+        Image.new("RGB", (64, 64), color=(i * 40, 50, 50)).save(image)
+
+    # Validation must contain BOTH classes, otherwise calibration cannot run and
+    # the report falls back to the default threshold.
+    val_real = ManifestRecord(sample_id="v1", image_path=str(images[0]), label=0,
+                              dataset="genimage", generator="nature", split="val")
+    val_fake = ManifestRecord(sample_id="v2", image_path=str(images[1]), label=1,
+                              dataset="genimage", generator="sd15", split="val")
+    train_real = ManifestRecord(sample_id="tr1", image_path=str(images[2]), label=0,
+                                dataset="genimage", generator="nature", split="train")
+    # Both test splits need reals as well as fakes, otherwise the test cohort is
+    # single-class and no binary metric (or threshold comparison) is defined.
+    in_domain_fake = ManifestRecord(sample_id="t1", image_path=str(images[3]), label=1,
+                                    dataset="genimage", generator="sd15", split="in_domain_test")
+    in_domain_real = ManifestRecord(sample_id="t2", image_path=str(images[4]), label=0,
+                                    dataset="genimage", generator="nature", split="in_domain_test")
+    ood_fake = ManifestRecord(sample_id="o1", image_path=str(images[5]), label=1,
+                              dataset="genimage", generator="midjourney", split="cross_generator_ood")
+    ood_real = ManifestRecord(sample_id="o2", image_path=str(images[6]), label=0,
+                              dataset="genimage", generator="nature", split="cross_generator_ood")
+
+    Manifest([val_real, val_fake]).to_jsonl(single_dir / "val.jsonl")
+    Manifest([in_domain_fake, in_domain_real]).to_jsonl(single_dir / "in_domain_test.jsonl")
+    Manifest([ood_fake, ood_real]).to_jsonl(single_dir / "cross_generator_ood.jsonl")
+    Manifest([train_real]).to_jsonl(single_dir / "train.jsonl")
+    return manifest_dir
+
+
+def _run_eval_with_fake_predictions(tmp_path, manifest_dir, out_dir):
+    import scripts.evaluate_r2 as eval_r2
+    from forensight.evaluation.runner import PredictionRecord, PredictionSet
+
+    cfg_p = tmp_path / "config.json"
+    cfg_p.write_text(json.dumps({
+        "variant": "forensic", "model": {}, "training": {"batch_size": 2},
+        "evaluation": {}, "git_commit": None, "source_payload_sha256": "a" * 64,
+    }))
+    ckpt_p = tmp_path / "model.pt"
+    ckpt_p.write_bytes(b"dummy_weights")
+
+    with patch("scripts.evaluate_r2.build_r2_model") as mock_build, \
+         patch("scripts.evaluate_r2.torch.load", return_value={"model_state_dict": {}}), \
+         patch("scripts.evaluate_r2.predict_to_prediction_set") as mock_pred:
+
+        mock_build.return_value = (MagicMock(), None, lambda x: torch.zeros(3, 16, 16))
+
+        def fake_pred(model, loader, device, variant):
+            return PredictionSet([
+                PredictionRecord(
+                    sample_id=rec.sample_id, label=rec.label,
+                    score=0.2 if rec.label == 0 else 0.8,
+                    split=rec.split, generator=rec.generator, dataset=rec.dataset,
+                    metadata=dict(rec.metadata),
+                )
+                for rec in loader.dataset.manifest
+            ])
+
+        mock_pred.side_effect = fake_pred
+        eval_r2.main([
+            "--experiment", "single", "--manifest-dir", str(manifest_dir),
+            "--config", str(cfg_p), "--checkpoint", str(ckpt_p),
+            "--out-dir", str(out_dir), "--dataset-revision", "synthetic-test-v1",
+        ])
+
+
+def test_evaluate_r2_writes_fixed_threshold_reference_report(tmp_path):
+    """Both threshold reports must exist and share one score cohort.
+
+    The seed-42 protocol requires a predeclared fixed-0.5 reference alongside the
+    validation-calibrated report, produced from the same prediction scores, so
+    the two are comparable and neither can be selected post hoc on test results.
+    """
+    manifest_dir = _single_manifest_fixture(tmp_path)
+    out_dir = tmp_path / "results_eval"
+    _run_eval_with_fake_predictions(tmp_path, manifest_dir, out_dir)
+
+    calibrated = out_dir / "evaluation.json"
+    fixed = out_dir / "evaluation_fixed_0_5.json"
+    assert calibrated.exists()
+    assert fixed.exists()
+
+    cal = json.loads(calibrated.read_text())
+    fix = json.loads(fixed.read_text())
+
+    # Threshold provenance differs...
+    assert cal["threshold_metadata"]["threshold_source"] == "val_optimal_f1"
+    assert fix["threshold_metadata"]["threshold_source"] == "default_0.5"
+    assert fix["threshold_metadata"]["threshold"] == pytest.approx(0.5)
+
+    # ...but the evaluated cohort is identical, so the comparison is fair.
+    assert cal["run_metadata"]["sample_set_hash"] == fix["run_metadata"]["sample_set_hash"]
+    assert cal["overall"]["auroc"] == pytest.approx(fix["overall"]["auroc"])
+
+
+def test_fixed_threshold_report_does_not_clobber_calibrated_decisions(tmp_path):
+    """The fixed-threshold pass must not overwrite the calibrated binary decisions."""
+    from forensight.evaluation.runner import PredictionSet
+
+    manifest_dir = _single_manifest_fixture(tmp_path)
+    out_dir = tmp_path / "results_eval"
+    _run_eval_with_fake_predictions(tmp_path, manifest_dir, out_dir)
+
+    pset = PredictionSet.from_jsonl(out_dir / "predictions.jsonl")
+    cal = json.loads((out_dir / "evaluation.json").read_text())
+    tau = cal["threshold_metadata"]["threshold"]
+
+    # Each stored decision must match the calibrated threshold, not 0.5.
+    for rec in pset:
+        expected = 1 if rec.score >= tau else 0
+        assert rec.prediction == expected, (
+            f"{rec.sample_id}: prediction {rec.prediction} != calibrated decision {expected}"
+        )
 
 
 def test_evaluate_all7_does_not_repeat_combined_test_samples(tmp_path):

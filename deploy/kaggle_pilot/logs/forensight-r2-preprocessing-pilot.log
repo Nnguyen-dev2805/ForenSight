@@ -1,0 +1,66 @@
+[{"stream_name":"stdout","time":26.508213325,"data":"================================================================================\n"}
+,{"stream_name":"stdout","time":26.508302603,"data":" FORENSIGHT PREPROCESSING PILOT: PROTOCOL A vs B1\n"}
+,{"stream_name":"stdout","time":26.553542781,"data":" Execution Device: cuda (Tesla T4)\n"}
+,{"stream_name":"stdout","time":26.553590521,"data":" Evaluated Partition: Validation Set ONLY (500 samples, balanced SD1.5 vs Real)\n"}
+,{"stream_name":"stdout","time":26.553595283,"data":" Zero-Data Snooping Guard: in_domain_test and cross_generator_ood are BLINDED\n"}
+,{"stream_name":"stdout","time":26.553598128,"data":"================================================================================\n"}
+,{"stream_name":"stderr","time":26.563348895,"data":"02:37:25 [INFO] Found dataset root via recursive walk: /kaggle/input/datasets/yangsangtai/tiny-genimage\n"}
+,{"stream_name":"stderr","time":221.782061628,"data":"02:40:41 [INFO] Pilot manifests prepared: train=4000 samples, val=500 samples\n"}
+,{"stream_name":"stderr","time":221.782477334,"data":"02:40:41 [INFO] === START RUN: Protocol=A | Seed=42 | Epochs=5 ===\n"}
+,{"stream_name":"stdout","time":222.045440059,"data":"Downloading: \"https://download.pytorch.org/models/resnet18-f37072fd.pth\" to /root/.cache/torch/hub/checkpoints/resnet18-f37072fd.pth\n"}
+,{"stream_name":"stderr","time":222.461900103,"data":"\r  0%|          | 0.00/44.7M [00:00\u003c?, ?B/s]\r 17%|█▋        | 7.38M/44.7M [00:00\u003c00:00, 76.2MB/s]\r 54%|█████▍    | 24.1M/44.7M [00:00\u003c00:00, 134MB/s] \r100%|██████████| 44.7M/44.7M [00:00\u003c00:00, 156MB/s]\n"}
+,{"stream_name":"stderr","time":264.846917085,"data":"02:41:24 [INFO] [A Seed=42] Epoch 1/5 - Train Loss: 0.4424 | Val Loss: 0.4508 (42.0s)\n"}
+,{"stream_name":"stderr","time":292.242671426,"data":"02:41:51 [INFO] [A Seed=42] Epoch 2/5 - Train Loss: 0.1897 | Val Loss: 0.4649 (27.4s)\n"}
+,{"stream_name":"stderr","time":320.092241634,"data":"02:42:19 [INFO] [A Seed=42] Epoch 3/5 - Train Loss: 0.1095 | Val Loss: 0.4350 (27.8s)\n"}
+,{"stream_name":"stderr","time":347.617546184,"data":"02:42:46 [INFO] [A Seed=42] Epoch 4/5 - Train Loss: 0.0755 | Val Loss: 0.4162 (27.5s)\n"}
+,{"stream_name":"stderr","time":375.652577128,"data":"02:43:14 [INFO] [A Seed=42] Epoch 5/5 - Train Loss: 0.0567 | Val Loss: 0.4506 (28.0s)\n"}
+,{"stream_name":"stderr","time":391.378584487,"data":"02:43:30 [INFO] [A Seed=42] EVAL DONE: Val AUROC=0.9427 | Acc=0.8740 (tau=0.06) | S=0.0188 (Real=0.0215, Fake=0.0162)\n"}
+,{"stream_name":"stderr","time":391.579858117,"data":"02:43:30 [INFO] === START RUN: Protocol=A | Seed=43 | Epochs=5 ===\n"}
+,{"stream_name":"stderr","time":419.612763262,"data":"02:43:58 [INFO] [A Seed=43] Epoch 1/5 - Train Loss: 0.4383 | Val Loss: 0.4251 (27.8s)\n"}
+,{"stream_name":"stderr","time":447.541802942,"data":"02:44:26 [INFO] [A Seed=43] Epoch 2/5 - Train Loss: 0.1836 | Val Loss: 0.3923 (27.9s)\n"}
+,{"stream_name":"stderr","time":474.834324281,"data":"02:44:54 [INFO] [A Seed=43] Epoch 3/5 - Train Loss: 0.1040 | Val Loss: 0.3964 (27.3s)\n"}
+,{"stream_name":"stderr","time":502.51377632,"data":"02:45:21 [INFO] [A Seed=43] Epoch 4/5 - Train Loss: 0.0829 | Val Loss: 0.4667 (27.7s)\n"}
+,{"stream_name":"stderr","time":530.215552792,"data":"02:45:49 [INFO] [A Seed=43] Epoch 5/5 - Train Loss: 0.0627 | Val Loss: 0.6530 (27.7s)\n"}
+,{"stream_name":"stderr","time":545.79918758,"data":"02:46:05 [INFO] [A Seed=43] EVAL DONE: Val AUROC=0.9421 | Acc=0.8460 (tau=0.92) | S=0.0361 (Real=0.0639, Fake=0.0083)\n"}
+,{"stream_name":"stderr","time":545.975319304,"data":"02:46:05 [INFO] === START RUN: Protocol=A | Seed=44 | Epochs=5 ===\n"}
+,{"stream_name":"stderr","time":573.896192818,"data":"02:46:33 [INFO] [A Seed=44] Epoch 1/5 - Train Loss: 0.4239 | Val Loss: 0.3538 (27.7s)\n"}
+,{"stream_name":"stderr","time":601.510314035,"data":"02:47:00 [INFO] [A Seed=44] Epoch 2/5 - Train Loss: 0.1834 | Val Loss: 0.3837 (27.6s)\n"}
+,{"stream_name":"stderr","time":629.450969682,"data":"02:47:28 [INFO] [A Seed=44] Epoch 3/5 - Train Loss: 0.1012 | Val Loss: 0.3962 (27.9s)\n"}
+,{"stream_name":"stderr","time":657.715093337,"data":"02:47:56 [INFO] [A Seed=44] Epoch 4/5 - Train Loss: 0.0736 | Val Loss: 0.5367 (28.3s)\n"}
+,{"stream_name":"stderr","time":686.067383885,"data":"02:48:25 [INFO] [A Seed=44] Epoch 5/5 - Train Loss: 0.0759 | Val Loss: 0.3964 (28.4s)\n"}
+,{"stream_name":"stderr","time":701.696064216,"data":"02:48:40 [INFO] [A Seed=44] EVAL DONE: Val AUROC=0.9529 | Acc=0.8940 (tau=0.12) | S=0.0127 (Real=0.0099, Fake=0.0154)\n"}
+,{"stream_name":"stderr","time":701.880876579,"data":"02:48:41 [INFO] === START RUN: Protocol=B1 | Seed=42 | Epochs=5 ===\n"}
+,{"stream_name":"stderr","time":738.113978295,"data":"02:49:17 [INFO] [B1 Seed=42] Epoch 1/5 - Train Loss: 0.4504 | Val Loss: 0.5319 (36.0s)\n"}
+,{"stream_name":"stderr","time":774.423952727,"data":"02:49:53 [INFO] [B1 Seed=42] Epoch 2/5 - Train Loss: 0.2053 | Val Loss: 0.4106 (36.3s)\n"}
+,{"stream_name":"stderr","time":810.403452563,"data":"02:50:29 [INFO] [B1 Seed=42] Epoch 3/5 - Train Loss: 0.1089 | Val Loss: 0.4737 (36.0s)\n"}
+,{"stream_name":"stderr","time":846.359279706,"data":"02:51:05 [INFO] [B1 Seed=42] Epoch 4/5 - Train Loss: 0.0768 | Val Loss: 0.4093 (36.0s)\n"}
+,{"stream_name":"stderr","time":882.731431882,"data":"02:51:41 [INFO] [B1 Seed=42] Epoch 5/5 - Train Loss: 0.0457 | Val Loss: 0.4499 (36.4s)\n"}
+,{"stream_name":"stderr","time":901.207970876,"data":"02:52:00 [INFO] [B1 Seed=42] EVAL DONE: Val AUROC=0.9437 | Acc=0.8620 (tau=0.20) | S=0.0000 (Real=0.0000, Fake=0.0000)\n"}
+,{"stream_name":"stderr","time":901.380790617,"data":"02:52:00 [INFO] === START RUN: Protocol=B1 | Seed=43 | Epochs=5 ===\n"}
+,{"stream_name":"stderr","time":937.539465128,"data":"02:52:36 [INFO] [B1 Seed=43] Epoch 1/5 - Train Loss: 0.4478 | Val Loss: 0.3882 (35.9s)\n"}
+,{"stream_name":"stderr","time":973.711782389,"data":"02:53:12 [INFO] [B1 Seed=43] Epoch 2/5 - Train Loss: 0.1894 | Val Loss: 0.3653 (36.2s)\n"}
+,{"stream_name":"stderr","time":1009.975210809,"data":"02:53:49 [INFO] [B1 Seed=43] Epoch 3/5 - Train Loss: 0.1088 | Val Loss: 0.6259 (36.3s)\n"}
+,{"stream_name":"stderr","time":1046.312637739,"data":"02:54:25 [INFO] [B1 Seed=43] Epoch 4/5 - Train Loss: 0.0880 | Val Loss: 0.4954 (36.3s)\n"}
+,{"stream_name":"stderr","time":1082.718919849,"data":"02:55:01 [INFO] [B1 Seed=43] Epoch 5/5 - Train Loss: 0.0617 | Val Loss: 0.4265 (36.4s)\n"}
+,{"stream_name":"stderr","time":1101.219515653,"data":"02:55:20 [INFO] [B1 Seed=43] EVAL DONE: Val AUROC=0.9489 | Acc=0.8820 (tau=0.19) | S=0.0000 (Real=0.0000, Fake=0.0000)\n"}
+,{"stream_name":"stderr","time":1101.396332086,"data":"02:55:20 [INFO] === START RUN: Protocol=B1 | Seed=44 | Epochs=5 ===\n"}
+,{"stream_name":"stderr","time":1138.049499616,"data":"02:55:57 [INFO] [B1 Seed=44] Epoch 1/5 - Train Loss: 0.4364 | Val Loss: 0.3721 (36.4s)\n"}
+,{"stream_name":"stderr","time":1174.623142819,"data":"02:56:33 [INFO] [B1 Seed=44] Epoch 2/5 - Train Loss: 0.1943 | Val Loss: 0.3413 (36.6s)\n"}
+,{"stream_name":"stderr","time":1210.910171105,"data":"02:57:10 [INFO] [B1 Seed=44] Epoch 3/5 - Train Loss: 0.0902 | Val Loss: 0.3917 (36.3s)\n"}
+,{"stream_name":"stderr","time":1247.7726937,"data":"02:57:47 [INFO] [B1 Seed=44] Epoch 4/5 - Train Loss: 0.0827 | Val Loss: 0.4757 (36.9s)\n"}
+,{"stream_name":"stderr","time":1284.39911282,"data":"02:58:23 [INFO] [B1 Seed=44] Epoch 5/5 - Train Loss: 0.0670 | Val Loss: 0.5915 (36.6s)\n"}
+,{"stream_name":"stderr","time":1303.448851774,"data":"02:58:42 [INFO] [B1 Seed=44] EVAL DONE: Val AUROC=0.9218 | Acc=0.8380 (tau=0.06) | S=0.0000 (Real=0.0000, Fake=0.0000)\n"}
+,{"stream_name":"stderr","time":1303.632168743,"data":"Traceback (most recent call last):\n"}
+,{"stream_name":"stderr","time":1303.632206729,"data":"  File \"/kaggle/src/script.py\", line 743, in \u003cmodule\u003e\n"}
+,{"stream_name":"stderr","time":1303.632431121,"data":"    run_pilot()\n"}
+,{"stream_name":"stderr","time":1303.632586368,"data":"  File \"/kaggle/src/script.py\", line 697, in run_pilot\n"}
+,{"stream_name":"stderr","time":1303.633007641,"data":"    - Sensitivity $S = \\\\frac{1}{N} \\\\sum |p(x) - p(\\\\text{{JPEG}}_{{95}}(x))|$ measures direct output shift when solely the compression process is perturbed.\n"}
+,{"stream_name":"stderr","time":1303.633087833,"data":"                                 ^\n"}
+,{"stream_name":"stderr","time":1303.633219872,"data":"NameError: name 'N' is not defined\n"}
+,{"stream_name":"stderr","time":1311.465285043,"data":"/usr/local/lib/python3.12/dist-packages/mistune.py:435: SyntaxWarning: invalid escape sequence '\\|'\n"}
+,{"stream_name":"stderr","time":1311.465332435,"data":"  cells[i][c] = re.sub('\\\\\\\\\\|', '|', cell)\n"}
+,{"stream_name":"stderr","time":1311.951365095,"data":"/usr/local/lib/python3.12/dist-packages/nbconvert/filters/filter_links.py:36: SyntaxWarning: invalid escape sequence '\\_'\n"}
+,{"stream_name":"stderr","time":1311.951408976,"data":"  text = re.sub(r'_', '\\_', text) # Escape underscores in display text\n"}
+,{"stream_name":"stderr","time":1312.821191325,"data":"[NbConvertApp] Converting notebook __script__.ipynb to html\n"}
+,{"stream_name":"stderr","time":1314.664547109,"data":"[NbConvertApp] Writing 410221 bytes to __results__.html\n"}
+]

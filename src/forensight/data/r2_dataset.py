@@ -96,6 +96,12 @@ class R2ImageDataset(Dataset[dict[str, Any]]):
                 "generator": record.generator,
                 "dataset": record.dataset,
                 "path": str(record.image_path),
+                # Which held-out real cohort this sample belongs to. Empty when the
+                # manifest predates the tag; the evaluator then falls back to
+                # split-level pairing.
+                "evaluation_generator": str(
+                    record.metadata.get("evaluation_generator", "")
+                ),
             }
             if self.clip_transform is not None:
                 sample["clip_image"] = self.clip_transform(image)

@@ -189,6 +189,31 @@ class TestDistributionStatistics:
         assert cb["by_class"]["c1"]["fake"] == 0
         assert "c1" in cb["classes_missing_fake"]
 
+    def test_class_balance_reports_namespace_overlap(self):
+        """Overlap between the real and fake class sets must be reported.
+
+        A near-zero overlap is the signature of an encoding mismatch (real and
+        fake spelling the same label space differently), which is the failure
+        this check should catch. Natural per-class sparsity is not.
+        """
+        overlapping = [
+            ManifestRecord(sample_id="1", image_path="/1.jpg", label=0, dataset="g", generator="n", split="train", class_id="n1"),
+            ManifestRecord(sample_id="2", image_path="/2.jpg", label=1, dataset="g", generator="sd14", split="train", class_id="n1"),
+            ManifestRecord(sample_id="3", image_path="/3.jpg", label=0, dataset="g", generator="n", split="train", class_id="n2"),
+            ManifestRecord(sample_id="4", image_path="/4.jpg", label=1, dataset="g", generator="sd14", split="train", class_id="n2"),
+        ]
+        cb = calculate_class_balance(overlapping)
+        assert cb["real_class_count"] == 2
+        assert cb["fake_class_count"] == 2
+        assert cb["class_namespace_overlap"] == 2
+
+        disjoint = [
+            ManifestRecord(sample_id="1", image_path="/1.jpg", label=0, dataset="g", generator="n", split="train", class_id="n01440764"),
+            ManifestRecord(sample_id="2", image_path="/2.jpg", label=1, dataset="g", generator="sd14", split="train", class_id="c0001"),
+        ]
+        cb = calculate_class_balance(disjoint)
+        assert cb["class_namespace_overlap"] == 0
+
 
 class TestAuditLeakage:
     """Unit tests for audit_manifest_leakage across splits."""

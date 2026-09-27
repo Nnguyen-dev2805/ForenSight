@@ -21,6 +21,7 @@ from forensight.data.tiny_genimage import (
     build_protocol_manifests,
     build_single_generator_manifests,
     build_tiny_genimage_manifests,
+    _class_id_from_path,
     detect_image_extension,
     download_tiny_genimage_parquets,
     extract_image_bytes,
@@ -487,6 +488,41 @@ class TestMultiGeneratorManifests:
         with pytest.raises(ValueError, match="held-out generator"):
             build_protocol_manifests(records, tmp_path, experiment="logo", leave_out_gen="sd14")
 
+    def test_fake_numeric_class_id_maps_to_imagenet_wnid(self):
+        """Fake prefixes must be normalized into the same namespace as real WNIDs.
+
+        Reals are named `n01440764_5969.JPEG` while fakes are `001_sdv5_...png`.
+        Left as-is the two spell the same label space differently, so the
+        class-balance audit reports a large *phantom* imbalance between them.
+        """
+        assert _class_id_from_path(
+            Path("imagenet_ai_0424_sdv5/train/ai/001_sdv5_00094.png")
+        ) == "n01440764"
+
+    def test_real_wnid_class_id_is_preserved(self):
+        assert _class_id_from_path(
+            Path("imagenet_ai_0419_biggan/train/nature/n01440764_5969.JPEG")
+        ) == "n01440764"
+
+    def test_ilsvrc_real_filename_maps_to_its_class(self):
+        """ImageNet-val reals carry only a running index, not a WNID.
+
+        ImageNet-1k validation holds 50 images per class in class order, so
+        index N belongs to class ceil(N/50). Without this the 3500 reals in
+        val/test have no class at all and cannot be compared with fakes.
+        """
+        assert _class_id_from_path(Path("val/nature/ILSVRC2012_val_00000001.JPEG")) == "n01440764"
+        assert _class_id_from_path(Path("val/nature/ILSVRC2012_val_00000051.JPEG")) == "n01443537"
+
+    def test_class_encoding_is_shared_between_real_and_fake(self):
+        """Both encodings must land in one namespace, or the audit warns falsely."""
+        fake = _class_id_from_path(Path("imagenet_ai_0424_sdv5/train/ai/001_sdv5_00094.png"))
+        real = _class_id_from_path(Path("val/nature/n01440764_5969.JPEG"))
+        assert fake == real == "n01440764"
+
+    def test_unknown_class_returns_none_rather_than_inventing_one(self):
+        assert _class_id_from_path(Path("imagenet_glide/val/ai/GLIDE_1000_200_00_002_glide_00039.png")) is None
+
     def test_build_single_generator_manifests(self, tmp_path: Path):
         records = self._build_multi_gen_records()
         manifest_dir = tmp_path / "single_manifests"
@@ -541,6 +577,50 @@ class TestMultiGeneratorManifests:
         assert (manifest_dir / "cross_generator_ood.jsonl").exists()
         for gid in expected_ood:
             assert (manifest_dir / f"test_{gid}.jsonl").exists()
+
+    def test_single_ood_reals_carry_their_own_generator_cohort(self, tmp_path: Path):
+        """Each OOD generator must own a disjoint, tagged real cohort.
+
+        All six unseen generators share one `cross_generator_ood` split, so
+        without a cohort tag the evaluator would pair every generator with the
+        same pooled reals and emit identical negative-reference counts.
+        """
+        from collections import Counter
+
+        records = self._build_multi_gen_records()
+        manifests = build_single_generator_manifests(
+            extracted_records=records,
+            manifest_dir=tmp_path / "single_cohorts",
+            train_generator="sd15",
+            seed=42,
+        )
+
+        ood_gens = {"adm", "biggan", "glide", "midjourney", "vqdm", "wukong"}
+        all_ood_reals: list[str] = []
+        for gen in ood_gens:
+            per_gen = manifests[f"test_{gen}"]
+            # Every record in the generator's own manifest carries that generator's tag.
+            tags = Counter(r.metadata.get("evaluation_generator") for r in per_gen)
+            assert set(tags) == {gen}, f"test_{gen} has mixed cohort tags: {dict(tags)}"
+
+            # Its reals are exactly the reals tagged for it.
+            gen_reals = [r.sample_id for r in per_gen if r.label == 0]
+            assert gen_reals, f"test_{gen} has no real reference cohort"
+            all_ood_reals.extend(gen_reals)
+
+        # No real is shared between generators: the negative references are disjoint.
+        assert len(all_ood_reals) == len(set(all_ood_reals))
+
+        # The aggregate split holds each generator's fakes and their tagged reals.
+        cross_ood = manifests["cross_generator_ood"]
+        for gen in ood_gens:
+            gen_tagged_reals = {
+                r.sample_id for r in cross_ood
+                if r.label == 0 and r.metadata.get("evaluation_generator") == gen
+            }
+            assert gen_tagged_reals == {
+                r.sample_id for r in manifests[f"test_{gen}"] if r.label == 0
+            }
 
     @pytest.mark.parametrize("leave_out_gen", [
         "sd15", "adm", "biggan", "glide", "midjourney", "vqdm", "wukong"
@@ -610,6 +690,10 @@ class TestMultiGeneratorManifests:
             build_all7_manifests(partial)
         with pytest.raises(ValueError, match="canonical generator set"):
             build_all_in_one_manifests(partial)
+        # The single protocol names its six OOD generators explicitly, so a
+        # partial dataset would silently drop one and shrink the OOD claim.
+        with pytest.raises(ValueError, match="canonical generator set"):
+            build_single_generator_manifests(partial, train_generator="sd15")
 
     def test_build_all7_manifests(self, tmp_path: Path):
         records = self._build_multi_gen_records()
@@ -686,11 +770,14 @@ class TestMultiGeneratorManifests:
     def test_class_id_from_path_extraction(self):
         from forensight.data.tiny_genimage import _class_id_from_path
 
-        assert _class_id_from_path(Path("imagenet_ai_0424_sdv5/train/ai/001_sdv5_00094.png")) == "c0001"
-        assert _class_id_from_path(Path("imagenet_ai_0508_adm/val/ai/056_adm_00012.png")) == "c0056"
+        # Fakes: 1-based class prefix, resolved into the ImageNet WNID namespace.
+        assert _class_id_from_path(Path("imagenet_ai_0424_sdv5/train/ai/001_sdv5_00094.png")) == "n01440764"
+        assert _class_id_from_path(Path("imagenet_ai_0508_adm/val/ai/056_adm_00012.png")) == "n01729977"
+        # Reals: WNID either in the filename or in a parent directory.
         assert _class_id_from_path(Path("imagenet_ai_0424_sdv5/train/nature/n01440764_12548.JPEG")) == "n01440764"
         assert _class_id_from_path(Path("some/folder/n02123045/image_123.jpg")) == "n02123045"
-        assert _class_id_from_path(Path("imagenet_ai_0424_sdv5/val/nature/ILSVRC2012_val_00000091.JPEG")) is None
+        # ImageNet-val reals: index 91 lies in the 2nd block of 50 -> class 2.
+        assert _class_id_from_path(Path("imagenet_ai_0424_sdv5/val/nature/ILSVRC2012_val_00000091.JPEG")) == "n01443537"
 
     def test_class_id_preserved_in_manifests(self):
         records = self._build_multi_gen_records()

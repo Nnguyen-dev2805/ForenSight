@@ -765,6 +765,53 @@ class TestThresholdAndPartitionInvariants:
         assert cm_mj["tp"] == 1
         assert cm_mj["tn"] == 1
 
+    def test_by_generator_uses_exact_cohort_when_reals_are_tagged(self):
+        """Each generator pairs with its OWN tagged reals, not the whole pool.
+
+        The single/OOD protocol puts every unseen generator in one
+        `cross_generator_ood` split, each with its own disjoint 500-real cohort.
+        Pairing by split alone gives every generator the same pooled reals,
+        which is what the shipped R2 artifacts show (each OOD generator
+        reporting an identical fp/tn over 3000 reals instead of its own 500).
+        """
+        records = [
+            # Two generators sharing one split, each with its own tagged reals.
+            PredictionRecord("f_adm", 1, 0.9, split="cross_generator_ood",
+                             generator="adm", metadata={"evaluation_generator": "adm"}),
+            PredictionRecord("r_adm1", 0, 0.1, split="cross_generator_ood",
+                             generator="nature", metadata={"evaluation_generator": "adm"}),
+            PredictionRecord("r_adm2", 0, 0.2, split="cross_generator_ood",
+                             generator="nature", metadata={"evaluation_generator": "adm"}),
+            PredictionRecord("f_mj", 1, 0.8, split="cross_generator_ood",
+                             generator="midjourney", metadata={"evaluation_generator": "midjourney"}),
+            PredictionRecord("r_mj1", 0, 0.3, split="cross_generator_ood",
+                             generator="nature", metadata={"evaluation_generator": "midjourney"}),
+            PredictionRecord("r_mj2", 0, 0.4, split="cross_generator_ood",
+                             generator="nature", metadata={"evaluation_generator": "midjourney"}),
+        ]
+        report = evaluate_predictions(PredictionSet(records), val_split_name="val")
+
+        # adm: 1 fake + its own 2 reals = 3 (NOT 5, which would pool midjourney's reals)
+        cm_adm = report.by_generator["adm"].confusion_matrix
+        assert sum(cm_adm.values()) == 3
+        assert cm_adm["tp"] == 1 and cm_adm["tn"] == 2 and cm_adm["fp"] == 0
+
+        # midjourney: 1 fake + its own 2 reals = 3
+        cm_mj = report.by_generator["midjourney"].confusion_matrix
+        assert sum(cm_mj.values()) == 3
+        assert cm_mj["tp"] == 1 and cm_mj["tn"] == 2 and cm_mj["fp"] == 0
+
+    def test_by_generator_pools_reals_only_without_cohort_tags(self):
+        """Untagged (legacy/synthetic) prediction sets keep the split-level fallback."""
+        records = [
+            PredictionRecord("f_adm", 1, 0.9, split="test", generator="adm"),
+            PredictionRecord("r1", 0, 0.1, split="test", generator="nature"),
+            PredictionRecord("r2", 0, 0.2, split="test", generator="nature"),
+        ]
+        report = evaluate_predictions(PredictionSet(records), val_split_name="val")
+        cm = report.by_generator["adm"].confusion_matrix
+        assert sum(cm.values()) == 3
+
     def test_sample_set_hash_encodes_canonical_tuples(self):
         # Two sets with identical sample_ids, but different ground-truth labels
         pset1 = PredictionSet([

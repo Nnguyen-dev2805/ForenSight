@@ -45,3 +45,9 @@ results/*
 # Kaggle deployment generated state
 deploy/kaggle/run_config.json
 deploy/kaggle/commit_info.json
+
+# Report artifact bundles. Human-readable evidence (reports, logs, JSON
+# summaries) stays committable; these are heavy archives that duplicate
+# already-ignored checkpoints, so committing them would bloat the repo.
+*.zip
+reports/**/checkpoints/

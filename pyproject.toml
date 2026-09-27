@@ -13,6 +13,10 @@ dependencies = [
     "torchvision",
     "open_clip_torch",
     "pyarrow",
+    # Imported directly for the ImageNet-1k WNID table used to normalize
+    # dataset class IDs. Already pulled in by open_clip_torch, but declared
+    # explicitly because forensight now imports it rather than only inheriting it.
+    "timm>=1.0.17",
 ]
 
 [project.optional-dependencies]

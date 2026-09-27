@@ -309,6 +309,7 @@ dependencies = [
     { name = "pillow" },
     { name = "pyarrow" },
     { name = "scikit-learn" },
+    { name = "timm" },
     { name = "torch" },
     { name = "torchvision" },
 ]
@@ -329,6 +330,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "scikit-learn" },
+    { name = "timm", specifier = ">=1.0.17" },
     { name = "torch" },
     { name = "torchvision" },
 ]

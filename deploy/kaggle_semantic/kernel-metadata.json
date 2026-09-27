@@ -1,6 +1,6 @@
 {
-  "id": "truongnhatnguyen2805/forensight-r2-fusion-training",
-  "title": "ForenSight R2 Fusion Training",
+  "id": "truongnhatnguyen2805/forensight-r2-semantic-training",
+  "title": "ForenSight R2 Semantic Training",
   "code_file": "main.py",
   "language": "python",
   "kernel_type": "script",

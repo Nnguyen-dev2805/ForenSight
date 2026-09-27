@@ -1,0 +1,24 @@
+================================================================================
+                 ForenSight R0 Smoke-Test Pipeline
+================================================================================
+[1/7] Verifying Dataset Inventory                              ... PASSED (2 datasets registered)
+[2/7] Generating Synthetic Smoke Dataset (5 classes)           ... PASSED (30 images across 4 splits)
+[3/7] Asserting Generator Disjointness & Zero Leakage          ... PASSED (clean)
+[4/7] Running Dataset Audit (Images & Leakage)                 ... PASSED (9 findings, 0 critical)
+[5/7] Simulating Detector Predictions (Seeds: [42, 43, 44])    ... PASSED (20 preds/seed)
+[6/7] Running Model Evaluation on Each Seed (Val Calibrated)   ... PASSED (3 reports, all calibrated)
+[7/7] Aggregating Multi-Seed Repeated Runs                     ... PASSED (3 runs, preliminary=False)
+================================================================================
+                              Summary
+================================================================================
+Status:               SUCCESS
+Total Duration:       0.042s
+Artifacts Persisted:  No (Temporary execution cleaned up)
+Base Random Seed:     42
+Aggregated Benchmark:
+  - Evaluation Runs:  3 seeds (preliminary=False)
+  - Overall AUROC:    1.0000 ± 0.0000
+  - Overall Accuracy: 1.0000 ± 0.0000
+  - Overall F1 Score: 1.0000 ± 0.0000
+================================================================================
+All 7 ForenSight R0 stages completed successfully.

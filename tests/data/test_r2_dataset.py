@@ -95,6 +95,44 @@ def test_dataset_loads_image_once_and_preserves_metadata(tmp_path: Path):
     assert sample["dataset"] == "genimage"
 
 
+def test_dataset_exposes_evaluation_generator_cohort_tag(tmp_path: Path):
+    """The per-generator cohort tag must survive manifest -> dataset.
+
+    The evaluator pairs each fake generator with its own held-out real cohort.
+    That tag lives in the manifest record's metadata, so the dataset has to
+    surface it as a plain string for the collate/inference path to carry.
+    """
+    import torch
+    from forensight.data.r2_dataset import R2ImageDataset
+
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (16, 12), color=(1, 2, 3)).save(image_path)
+    manifest = Manifest([
+        ManifestRecord(
+            sample_id="s1",
+            image_path=str(image_path),
+            label=1,
+            dataset="genimage",
+            generator="adm",
+            split="cross_generator_ood",
+            metadata={"evaluation_generator": "adm"},
+        ),
+        # A record without the tag must yield an empty string, not raise or drop the key.
+        ManifestRecord(
+            sample_id="s2",
+            image_path=str(image_path),
+            label=0,
+            dataset="genimage",
+            generator="nature",
+            split="cross_generator_ood",
+        ),
+    ])
+    dataset = R2ImageDataset(manifest, clip_transform=lambda image: torch.ones(3, 8, 8))
+
+    assert dataset[0]["evaluation_generator"] == "adm"
+    assert dataset[1]["evaluation_generator"] == ""
+
+
 def test_dataset_requires_at_least_one_transform():
     from forensight.data.r2_dataset import R2ImageDataset
 

@@ -330,6 +330,14 @@ def calculate_class_balance(attrs: Sequence[ManifestRecord | ImageAttributes]) -
     missing_real = [cid for cid, c in classes.items() if c["real"] == 0]
     missing_fake = [cid for cid, c in classes.items() if c["fake"] == 0]
 
+    # Per-class sparsity is normal: sampling a few thousand images from a
+    # thousand classes leaves many classes one-sided by chance alone, so the
+    # `missing_*` counts above are descriptive, not evidence of a defect.
+    # What IS a defect is the two sides not sharing a label namespace at all,
+    # which is what an encoding mismatch looks like from here.
+    real_classes = {cid for cid, c in classes.items() if c["real"] > 0 and cid != "__unassigned__"}
+    fake_classes = {cid for cid, c in classes.items() if c["fake"] > 0 and cid != "__unassigned__"}
+
     return {
         "num_classes": len(classes),
         "min_per_class_real": min(reals_per_class) if reals_per_class else 0,
@@ -338,6 +346,9 @@ def calculate_class_balance(attrs: Sequence[ManifestRecord | ImageAttributes]) -
         "max_per_class_fake": max(fakes_per_class) if fakes_per_class else 0,
         "classes_missing_real": missing_real,
         "classes_missing_fake": missing_fake,
+        "real_class_count": len(real_classes),
+        "fake_class_count": len(fake_classes),
+        "class_namespace_overlap": len(real_classes & fake_classes),
         "by_class": by_class,
     }
 
@@ -958,18 +969,26 @@ def audit_manifest_images(
             })
 
     # Finding 8: Class Balance
-    if class_balance.get("classes_missing_real") or class_balance.get("classes_missing_fake"):
+    real_class_count = class_balance.get("real_class_count", 0)
+    fake_class_count = class_balance.get("fake_class_count", 0)
+    overlap = class_balance.get("class_namespace_overlap", 0)
+    # Real and fake must draw from a shared label namespace. When both sides are
+    # present but share (almost) no class, the two are encoded differently --
+    # e.g. real `n01440764` vs fake `c0001` -- and every per-class comparison is
+    # meaningless. Sparsity alone is expected and must not warn.
+    if real_class_count and fake_class_count and overlap == 0:
         summary_findings.append({
             "check": "class_balance",
             "status": "WARNING",
             "severity": "WARNING",
             "message": (
-                f"Class balance warning: {len(class_balance.get('classes_missing_real', []))} class(es) missing real samples, "
-                f"{len(class_balance.get('classes_missing_fake', []))} class(es) missing fake samples."
+                "Real and fake samples share no class IDs: the two sides appear to "
+                "use different class encodings, so per-class balance cannot be compared."
             ),
             "details": {
-                "classes_missing_real": class_balance.get("classes_missing_real"),
-                "classes_missing_fake": class_balance.get("classes_missing_fake"),
+                "real_class_count": real_class_count,
+                "fake_class_count": fake_class_count,
+                "class_namespace_overlap": overlap,
             },
         })
     else:
@@ -977,7 +996,15 @@ def audit_manifest_images(
             "check": "class_balance",
             "status": "PASS",
             "severity": "INFO",
-            "message": f"All {class_balance.get('num_classes', 0)} classes have balanced real and fake representation.",
+            "message": (
+                f"Real and fake share {overlap} class(es) across "
+                f"{class_balance.get('num_classes', 0)} observed classes."
+            ),
+            "details": {
+                "real_class_count": real_class_count,
+                "fake_class_count": fake_class_count,
+                "class_namespace_overlap": overlap,
+            },
         })
 
     # Finding 9: Source-Label Correlation

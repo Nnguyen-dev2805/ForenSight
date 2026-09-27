@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 
 from forensight.data.r2_dataset import R2ImageDataset, load_manifest_file
 from forensight.evaluation.reproducibility import create_reproducibility_record
-from forensight.evaluation.runner import PredictionSet, evaluate_predictions
+from forensight.evaluation.runner import PredictionRecord, PredictionSet, evaluate_predictions
 from forensight.training.r2 import (
     build_r2_model,
     load_checkpoint,
@@ -358,6 +358,41 @@ def main(argv: list[str] | None = None) -> int:
         report_md_path.parent.mkdir(parents=True, exist_ok=True)
         report.save_markdown(report_md_path)
         print(f"Saved evaluation Markdown report to {report_md_path}")
+
+    # Predeclared operational reference at a fixed threshold, from the SAME
+    # scores as the calibrated report. Evaluating on a fresh copy matters:
+    # evaluate_predictions writes binary decisions back onto the records, so
+    # reusing `test_only` would overwrite the calibrated decisions with 0.5 ones.
+    if out_dir:
+        fixed_threshold = 0.5
+        fixed_test_only = PredictionSet([
+            PredictionRecord(
+                sample_id=r.sample_id,
+                label=r.label,
+                score=r.score,
+                split=r.split,
+                generator=r.generator,
+                dataset=r.dataset,
+                path=r.path,
+                metadata=dict(r.metadata),
+            )
+            for r in test_only
+        ])
+        if len(fixed_test_only) > 0 and len(np.unique(fixed_test_only.y_true)) >= 2:
+            fixed_report = evaluate_predictions(
+                fixed_test_only,
+                val_split_name="val",
+                threshold_strategy=threshold_strategy,
+                default_threshold=fixed_threshold,
+                seed=config.get("seed"),
+                run_metadata=dict(eval_run_meta, threshold_note="fixed operational reference"),
+            )
+            fixed_path = out_dir / "evaluation_fixed_0_5.json"
+            fixed_path.write_text(
+                json.dumps(fixed_report.to_dict(), indent=2), encoding="utf-8"
+            )
+            fixed_report.save_markdown(out_dir / "evaluation_fixed_0_5.md")
+            print(f"Saved fixed-threshold reference report to {fixed_path}")
 
     if args.repro_json:
         repro_path = Path(args.repro_json)

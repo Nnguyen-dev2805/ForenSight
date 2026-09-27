@@ -1,31 +1,27 @@
 #!/usr/bin/env python3
 """ForenSight Milestone R2: Standalone Kaggle GPU Execution Script.
 
-WARNING -- NON-CANONICAL, DO NOT USE FOR REPORTED RESULTS.
-    This script is a self-contained fork of the R2 pipeline and has drifted from the
-    canonical implementation in `src/forensight/`. Verified divergences:
-      * the NPR residual is not standardized by its spatial std (canonical:
-        `models/forensic.py`, enforced by the `npr_normalization` guard in `training/r2.py`);
-      * forensic preprocessing uses `Resize((224, 224))`, an anisotropic square resize,
-        instead of `Resize(n) + CenterCrop(n)` (canonical: `data/r2_dataset.py`);
-      * the forensic backbone is built with `resnet18(weights=None)` while the canonical
-        configs set `forensic_pretrained: true`;
-      * splits and training hyperparameters are defined locally instead of being read from
-        sealed manifests and `configs/r2/*.json`.
-    Numbers produced here are therefore NOT protocol-equivalent to numbers produced from
-    `src/`. See docs/decisions/2026-09-26-align-branch-preprocessing.md.
+WARNING -- LEGACY / NON-CANONICAL STANDALONE PROTOTYPE. DO NOT USE FOR REPORTED RESULTS.
+The canonical ForenSight R2 execution path is:
+  `deploy/kaggle/official.py` staged and orchestrated via `scripts/run_on_kaggle.py`,
+  which directly mounts the version-pinned dataset on Kaggle GPU and executes canonical `src/forensight/`.
+This file is maintained for standalone legacy reference only. Official benchmarks must run through `official.py`.
 
 This script runs on Kaggle GPU (e.g., NVIDIA T4 x2) to:
-1. Download and extract TheKernel01/Tiny-GenImage dataset from Hugging Face Hub (pinned revision).
-2. Build generator-disjoint train, validation, and OOD test manifests.
-3. Train canonical ForenSight R2 architectures:
-   - Semantic-only (frozen CLIP ViT-L/14 + projection + MLP)
-   - Forensic-only (trainable ResNet18 weights=None + NPR residual transform + projection + MLP)
-   - Concat Fusion (combining semantic and forensic representations)
+1. Download and extract the `TheKernel01/Tiny-GenImage` Hugging Face mirror (pinned revision).
+   Note: this is NOT the canonical `yangsangtai/tiny-genimage` source, and the two corpora
+   are not interchangeable.
+2. Build generator-disjoint train, validation, and OOD test manifests locally, rather than
+   reading the sealed manifests produced by `src/forensight/data/`.
+3. Train R2-shaped architectures (semantic-only, forensic-only, concat fusion) re-implemented
+   in this file, so they track the canonical models by intent rather than by shared code.
 4. Calibrate the decision threshold tau* strictly on the validation set.
 5. Evaluate against In-Domain (in_domain_test) and Held-Out (cross_generator_ood) distributions.
-6. Export the complete, strict ForenSight Artifact Contract to /kaggle/working/results/r2/
-   and package into /kaggle/working/results_r2.zip for local reproduction.
+6. Export a self-contained result bundle to /kaggle/working/results/r2/
+   and package into /kaggle/working/results_r2.zip.
+
+Because items 1-3 diverge from the canonical pipeline, this script's outputs are
+exploratory only and must never be mixed with canonical `src/` results.
 """
 
 from __future__ import annotations
@@ -121,7 +117,9 @@ class NPRTransform(nn.Module):
             mode=self.mode,
             align_corners=False,
         )
-        return image - reconstructed
+        residual = image - reconstructed
+        std = residual.std(dim=(-2, -1), keepdim=True)
+        return residual / (std + 1e-6)
 
 
 class ForensicEncoder(nn.Module):
@@ -1656,7 +1654,8 @@ def main() -> int:
         ])
 
     forensic_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize(224),
+        transforms.CenterCrop(224),
         transforms.ToTensor(),
     ])
 
