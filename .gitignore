@@ -25,6 +25,8 @@ secrets*.json
 
 # Notebook state
 .ipynb_checkpoints/
+notebooks/*.html
+notebooks/*.pdf
 
 # Model checkpoints
 *.pt
@@ -37,10 +39,15 @@ data/raw/*
 !data/raw/.gitkeep
 data/derived/*
 !data/derived/.gitkeep
+data/manifests/*
+!data/manifests/.gitkeep
 
 # Generated experiment outputs
 results/*
 !results/.gitkeep
+reports/*
+!reports/.gitkeep
+*.log
 
 # Kaggle deployment generated state
 deploy/kaggle/run_config.json
